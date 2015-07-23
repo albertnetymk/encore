@@ -36,6 +36,7 @@ module Typechecker.Environment(Environment,
 import Data.List
 import Data.Maybe
 import Control.Applicative ((<|>))
+import Control.Monad
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Text.Printf (printf)
