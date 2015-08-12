@@ -152,6 +152,7 @@ resolveRefType ty
           matchTypeParameterLength formal ty
           let res = formal `setTypeParameters` getTypeParameters ty
                            `withModeOf` ty
+                           `withBoxOf` ty
           return (res, formal)
         Nothing ->
           tcError $ UnknownRefTypeError ty
