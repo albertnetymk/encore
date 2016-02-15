@@ -664,6 +664,7 @@ highOrderExpr = adtExpr
 
 expr :: Parser Expr
 expr  =  unit
+     <|> break
      <|> try embed
      <|> try path
      <|> try functionCall
@@ -716,6 +717,9 @@ expr  =  unit
       unit = do pos <- getPosition
                 reservedOp "()"
                 return $ Skip (meta pos)
+      break = do pos <- getPosition
+                 reserved "break"
+                 return $ Break (meta pos)
       path = do pos <- getPosition
                 root <- parens expression <|> try functionCall <|> varAccess <|> stringLit
                 first <- pathComponent
