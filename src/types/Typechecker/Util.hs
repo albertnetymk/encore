@@ -126,12 +126,12 @@ resolveSingleType ty
     resolveCapa t =
         mapM_ resolveSingleTrait (typesFromCapability t) >> return t
     resolveSingleTrait t
-          | isRefType t = do
-              result <- asks $ traitLookup t
-              when (isNothing result) $
-                 tcError $ UnknownTraitError t
-          | otherwise =
-              tcError $ MalformedCapabilityError t
+      | isRefType t = do
+          result <- asks $ traitLookup t
+          when (isNothing result) $
+             tcError $ UnknownTraitError t
+      | otherwise =
+          tcError $ MalformedCapabilityError t
 
 resolveTypeAndCheckForLoops :: Type -> TypecheckM Type
 resolveTypeAndCheckForLoops ty =
@@ -157,9 +157,7 @@ resolveRefType ty
       case result of
         Just formal -> do
           matchTypeParameterLength formal ty
-          let res = formal `setTypeParameters` getTypeParameters ty
-                           `withModeOf` ty
-                           `withBoxOf` ty
+          let res = ty `resolvedFrom` formal
           return (res, formal)
         Nothing ->
           tcError $ UnknownRefTypeError ty
@@ -181,6 +179,8 @@ resolveMode actual formal
       when (isReadRefType actual) $
            unless (isReadRefType formal) $
                   tcError CannotGiveReadModeError
+      unless (null $ barredFields actual) $
+             tcError $ CannotHaveRestrictedFieldsError actual
       return actual
   | otherwise =
       error $ "Util.hs: Cannot resolve unknown reftype: " ++ show formal
@@ -233,10 +233,18 @@ subtypeOf ty1 ty2
           | getId ref1 == getId ref2
           , params1 <- getTypeParameters ref1
           , params2 <- getTypeParameters ref2
+          , barred1 <- barredFields ref1
+          , barred2 <- barredFields ref2
           , length params1 == length params2 = do
               results <- zipWithM subtypeOf params1 params2
-              return (and results)
+              return $ and results && null (barred1 \\ barred2) &&
+                       matchingPristiness ref1 ref2
           | otherwise = return False
+          where
+            matchingPristiness ref1 ref2
+                | isPristineRefType ref1 = True
+                | not (isPristineRefType ref1) && not (isPristineRefType ref2) = True
+                | otherwise = False
 
       capabilitySubtypeOf cap1 cap2 = do
         let traits1 = typesFromCapability cap1
@@ -293,7 +301,10 @@ findField ty f = do
   result <- asks $ fieldLookup ty f
   case result of
     Just fdecl -> return fdecl
-    Nothing -> tcError $ FieldNotFoundError f ty
+    Nothing ->
+        if f `elem` barredFields ty
+        then tcError $ RestrictedFieldLookupError f ty
+        else tcError $ FieldNotFoundError f ty
 
 findMethod :: Type -> Name -> TypecheckM FunctionHeader
 findMethod ty = liftM fst . findMethodWithCalledType ty
@@ -346,7 +357,14 @@ propagateResultType ty e
           mc{mchandler = propagateResultType ty mchandler}
 
 isLinearType :: (MonadReader Environment m) => Type -> m Bool
-isLinearType = isLinearType' []
+isLinearType ty
+    | isRefType ty = do
+        Just flds <- asks $ fields ty
+        if all (\f -> isValField f || isSpecField f) flds then
+            return False
+        else
+            isLinearType' [] ty
+    | otherwise = isLinearType' [] ty
     where
       isLinearType' :: (MonadReader Environment m) => [Type] -> Type -> m Bool
       isLinearType' checked ty = do

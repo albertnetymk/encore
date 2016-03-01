@@ -64,6 +64,9 @@ module Types(
             ,typesFromCapability
             ,withModeOf
             ,withBoxOf
+            ,resolvedFrom
+            ,bar
+            ,barredFields
             ,typeComponents
             ,typeMap
             ,typeMapM
@@ -91,10 +94,14 @@ module Types(
             ,makeUnsafe
             ,makeLinear
             ,makeThread
+            ,makePristine
             ,makeRead
             ,makeSubordinate
+            ,makeLockfree
             ,isLinearRefType
+            ,isPristineRefType
             ,isThreadRefType
+            ,isLockfreeRefType
             ,isReadRefType
             ,isSubordinateRefType
             ,isUnsafeRefType
@@ -109,6 +116,8 @@ import Data.Traversable
 import Control.Monad
 
 import Debug.Trace
+
+import Identifiers
 
 data Activity = Active
               | Shared
@@ -126,54 +135,80 @@ data Mode = Linear
           | Thread
           | Unsafe
           | Read
+          | Lockfree
           | Subordinate
             deriving(Eq)
 
 instance Show Mode where
-    show Linear = "linear"
-    show Thread = "thread"
-    show Unsafe = "unsafe"
-    show Read   = "read"
+    show Linear      = "linear"
+    show Thread      = "thread"
+    show Unsafe      = "unsafe"
+    show Read        = "read"
+    show Lockfree    = "lockfree"
     show Subordinate = "subord"
 
 modeSubtypeOf ty1 ty2 = getMode ty1 == getMode ty2
 
 modeIsSafe Read = True
+modeIsSafe Lockfree = True
 modeIsSafe _    = False
 
 data RefInfo = RefInfo{refId :: String
                       ,parameters :: [Type]
                       ,mode :: Maybe Mode
+                      ,barred :: [Name]
                       }
 
 -- The current modes are irrelevant for equality checks
 instance Eq RefInfo where
     ref1 == ref2 = refId ref1 == refId ref2 &&
-                   parameters ref1 == parameters ref2
+                   parameters ref1 == parameters ref2 &&
+                   barred ref1 == barred ref2
 
 instance Show RefInfo where
-    show RefInfo{mode, refId, parameters}
-        | null parameters = smode ++ refId
-        | otherwise = smode ++ refId ++ "<" ++ params ++ ">"
+    show RefInfo{mode, refId, parameters, barred}
+        | null parameters = smode ++ refId ++ bar barred
+        | otherwise = smode ++ refId ++ "<" ++ params ++ ">" ++ bar barred
         where
           smode
               | isNothing mode = ""
               | otherwise = show (fromJust mode) ++ " "
           params = intercalate ", " (map show parameters)
+          bar [] = ""
+          bar (f:fs) = " | " ++ show f ++ bar fs
 
-showRefInfoWithoutMode RefInfo{refId, parameters}
-    | null parameters = refId
-    | otherwise = refId ++ "<" ++ params ++ ">"
+showRefInfoWithoutMode RefInfo{refId, parameters, barred}
+    | null parameters = refId ++ bar barred
+    | otherwise = refId ++ "<" ++ params ++ ">" ++ bar barred
     where
       params = intercalate ", " (map show parameters)
+      bar [] = ""
+      bar (f:fs) = " | " ++ show f ++ bar fs
 
-data Box = Stackbound deriving(Eq)
+data Box = Stackbound
+         | Pristine deriving(Eq)
 
 instance Show Box where
     show Stackbound = "borrowed"
+    show Pristine = "pristine"
 
 data Type = Type {inner :: InnerType
                  ,box   :: Maybe Box}
+
+bar ty f
+    | isRefType ty
+    , iType <- inner ty
+    , info <- refInfo iType
+    , barred <- barred info
+      = ty{inner = iType{refInfo = info{barred = barred `union` [f]}}}
+    | otherwise = error $ "Types.hs: Cannot bar " ++ showWithKind ty
+
+barredFields ty
+    | isRefType ty
+    , iType <- inner ty
+    , info <- refInfo iType
+    , barred <- barred info = barred
+    | otherwise = error $ "Types.hs: No barred fields in " ++ showWithKind ty
 
 typ ity = Type{inner = ity, box = Nothing}
 
@@ -185,7 +220,7 @@ instance Eq Type where
 instance Show Type where
     show Type{inner, box = Nothing} = show inner
     show Type{inner, box = Just s} =
-        show s ++ "(" ++ show inner ++ ")"
+        show s ++ " " ++ show inner
 
 data InnerType =
           Unresolved{refInfo :: RefInfo}
@@ -515,21 +550,48 @@ withModeOf sink source
 
 withBoxOf sink source = sink{box = box source}
 
-refTypeWithParams refId parameters =
+refTypeWithParams refId parameters barred =
     typ Unresolved{refInfo}
     where
       refInfo = RefInfo{refId
                        ,parameters
                        ,mode = Nothing
+                       ,barred
                        }
 
-refType id = refTypeWithParams id []
+refType id = refTypeWithParams id [] []
+
+resolvedFrom actual formal
+    | isRefType actual && isRefType formal
+    , refInfo <- refInfo . inner $ actual
+        = case () of _
+                      | isActiveClassType formal ->
+                          actual{inner = ClassType{refInfo, activity = Active}}
+                      | isPassiveClassType formal ->
+                          actual{inner = ClassType{refInfo, activity = Passive}}
+                      | isSharedClassType formal ->
+                          actual{inner = ClassType{refInfo, activity = Shared}}
+                      | isTraitType formal ->
+                          actual{inner = TraitType{refInfo}}
+                      | otherwise ->
+                          error $ "Types.hs: Unknown kind of reftype: " ++
+                                  showWithKind formal
+    | isRefType actual && isTypeSynonym formal
+    , refInfo <- refInfo . inner $ actual
+    , resolvesTo <- resolvesTo . inner $ formal
+    , subst <- zip (getTypeParameters formal) (getTypeParameters actual)
+    , resolvesTo' <- replaceTypeVars subst resolvesTo
+      = actual{inner = TypeSynonym{refInfo, resolvesTo = resolvesTo'}}
+    | otherwise =
+        error $ "Types.hs: " ++ showWithKind actual ++
+                " is not resolvable from " ++ showWithKind formal
 
 classType :: Activity -> String -> [Type] -> Type
 classType activity name parameters =
     Type{inner = ClassType{refInfo = RefInfo{refId = name
                                             ,parameters
-                                            ,mode = Nothing}
+                                            ,mode = Nothing
+                                            ,barred = []}
                           , activity}
         ,box = Nothing
         }
@@ -538,7 +600,8 @@ traitType :: String -> [Type] -> Type
 traitType name parameters =
     Type{inner = TraitType{refInfo = RefInfo{refId = name
                                             ,parameters
-                                            ,mode = Nothing}}
+                                            ,mode = Nothing
+                                            ,barred = []}}
 
         ,box = Nothing
         }
@@ -583,8 +646,13 @@ setMode ty m
 makeUnsafe ty = setMode ty Unsafe
 makeLinear ty = setMode ty Linear
 makeThread ty = setMode ty Thread
+
+makePristine ty = ty{box = Just Pristine}
+
 makeRead ty = setMode ty Read
 makeSubordinate ty = setMode ty Subordinate
+
+makeLockfree ty = setMode ty Lockfree
 
 isSafeType ty
     |  isMaybeType ty
@@ -612,6 +680,9 @@ isThreadRefType ty
     | Just Thread <- getMode ty = True
     | otherwise = False
 
+isPristineRefType Type{box = Just Pristine} = True
+isPristineRefType _ = False
+
 isReadRefType ty
     | Just Read <- getMode ty = True
     | otherwise = False
@@ -622,6 +693,10 @@ isSubordinateRefType ty
 
 isUnsafeRefType ty
     | Just Unsafe <- getMode ty = True
+    | otherwise = False
+
+isLockfreeRefType ty
+    | Just Lockfree <- getMode ty = True
     | otherwise = False
 
 isCapabilityType Type{inner = CapabilityType{}} = True
@@ -750,7 +825,8 @@ typeSynonym :: String -> [Type] -> Type -> Type
 typeSynonym name parameters resolution =
   typ TypeSynonym{refInfo = RefInfo{refId = name
                                    ,parameters
-                                   ,mode = Nothing}
+                                   ,mode = Nothing
+                                   ,barred = []}
                  ,resolvesTo = resolution}
 
 typeSynonymLHS :: Type -> (String, [Type])

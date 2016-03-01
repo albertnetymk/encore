@@ -21,7 +21,7 @@ import Control.Applicative ((<$>))
 
 -- Module dependencies
 import Identifiers
-import Types hiding(refType)
+import Types hiding(refType, bar)
 import AST.AST
 import AST.Meta hiding(Closure, Async)
 
@@ -182,8 +182,9 @@ typ = buildExpressionParser opTable singleType
                  ,typeConstructor "Par" parType
                  ,typeConstructor "Stream" streamType
                  ],
-                 [typeConstructor "borrowed" makeStackbound],
-                 [arrow]
+                 [arrow],
+                 [typeConstructor "pristine" makePristine
+                 ,typeConstructor "borrowed" makeStackbound]
                 ]
       typeOp op constructor =
           Infix (do reservedOp op
@@ -228,7 +229,8 @@ typ = buildExpressionParser opTable singleType
         notFollowedBy lower
         refId <- identifier
         parameters <- option [] $ angles (commaSep1 typ)
-        return $ mode $ refTypeWithParams refId parameters
+        barred <- option [] $ do {bar; (Name <$> identifier) `sepBy` bar}
+        return $ mode $ refTypeWithParams refId parameters barred
       primitive =
         do {reserved "int"; return intType} <|>
         do {reserved "bool"; return boolType} <|>
@@ -398,6 +400,8 @@ mode = (reserved "linear" >> return makeLinear)
        <|>
        (reserved "read" >> return makeRead)
        <|>
+       (reserved "lockfree" >> return makeLockfree)
+       <|>
        (reserved "subord" >> return makeSubordinate)
        <?> "mode"
 
@@ -461,12 +465,16 @@ classDecl = do
 
 modifier :: Parser Modifier
 modifier = val
-           <?>
-           "modifier"
+        <|> spec
+        <?>
+        "modifier"
     where
       val = do
         reserved "val"
         return Val
+      spec = do
+        reserved "spec"
+        return Spec
 
 fieldDecl :: Parser FieldDecl
 fieldDecl = do fmeta <- meta <$> getPosition
@@ -669,6 +677,7 @@ expr  =  unit
      <|> try path
      <|> try functionCall
      <|> try print
+     <|> try speculate
      <|> try closure
      <|> try tupleLit
      <|> match
@@ -892,6 +901,10 @@ expr  =  unit
                  reserved "print"
                  arg <- option [] ((:[]) <$> expression)
                  return $ FunctionCall (meta pos) (Name "print") arg
+      speculate = do pos <- getPosition
+                     reserved "speculate"
+                     p <- expression
+                     return $ Speculate (meta pos) p
       stringLit = do pos <- getPosition
                      string <- stringLiteral
                      return $ StringLiteral (meta pos) string
