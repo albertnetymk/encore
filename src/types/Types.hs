@@ -65,6 +65,7 @@ module Types(
             ,withModeOf
             ,withBoxOf
             ,resolvedFrom
+            ,unbox
             ,bar
             ,barredFields
             ,typeComponents
@@ -194,6 +195,9 @@ instance Show Box where
 
 data Type = Type {inner :: InnerType
                  ,box   :: Maybe Box}
+
+unbox :: Type -> Type
+unbox ty = ty{box = Nothing}
 
 bar ty f
     | isRefType ty
