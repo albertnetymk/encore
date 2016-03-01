@@ -66,6 +66,7 @@ module Types(
             ,withBoxOf
             ,resolvedFrom
             ,unbox
+            ,unbar
             ,bar
             ,barredFields
             ,typeComponents
@@ -196,8 +197,14 @@ instance Show Box where
 data Type = Type {inner :: InnerType
                  ,box   :: Maybe Box}
 
-unbox :: Type -> Type
 unbox ty = ty{box = Nothing}
+
+unbar ty
+    | isRefType ty
+    , iType <- inner ty
+    , info <- refInfo iType
+      = ty{inner = iType{refInfo = info{barred = []}}}
+    | otherwise = error $ "Types.hs: Cannot unbar " ++ showWithKind ty
 
 bar ty f
     | isRefType ty
