@@ -32,7 +32,7 @@ module Typechecker.Environment(Environment,
                                backtrace,
                                currentMethod,
                                inLoop,
-                               inSpeculation,
+                               safeToSpeculate,
                                pushBT,
                                refTypeParameters
                                ) where
@@ -146,8 +146,8 @@ formalBindings formal actual
 inLoop :: Environment -> Bool
 inLoop = loopInBacktrace . bt
 
-inSpeculation :: Environment -> Bool
-inSpeculation = speculationInBacktrace . bt
+safeToSpeculate :: Environment -> Bool
+safeToSpeculate = safeToSpeculateBT . bt
 
 fields :: Type -> Environment -> Maybe [FieldDecl]
 fields t env
