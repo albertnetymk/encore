@@ -1024,7 +1024,7 @@ instance Checkable Expr where
           let lhsType = AST.getType eLhs
               rhsType = AST.getType eRhs
           isDowncast <- rhsType `subtypeOf` lhsType
-          fdecl <- findField lhsType f
+          fdecl <- findField targetType f
           if isDowncast && isSpecField fdecl
           then do
             let bindings = [(name target, targetType `bar` f)]
@@ -1118,7 +1118,7 @@ instance Checkable Expr where
       unless (isClassType ty'' && not (isMainType ty'')) $
              tcError $ ObjectCreationError ty''
       header <- findMethod ty'' constructorName
-      matchArgumentLength ty header args
+      matchArgumentLength ty'' header args
       let expectedTypes = map ptype (hparams header)
       (eArgs, bindings) <- matchArguments args expectedTypes
       checkArgsEncapsulation eArgs ty''
