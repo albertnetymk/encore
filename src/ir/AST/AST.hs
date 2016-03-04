@@ -500,8 +500,7 @@ data Expr = Skip {emeta :: Meta Expr}
                  leftover :: Maybe Name
                 }
           | Freeze {emeta :: Meta Expr,
-                    target :: Expr,
-                    val :: Expr}
+                    target :: Expr}
           | IsFrozen {emeta :: Meta Expr,
                       target :: Expr}
           | Get {emeta :: Meta Expr,
