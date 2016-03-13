@@ -33,6 +33,7 @@ module Typechecker.Environment(Environment,
                                currentMethod,
                                inLoop,
                                safeToSpeculate,
+                               safeToReadOnce,
                                pushBT,
                                refTypeParameters
                                ) where
@@ -149,6 +150,9 @@ inLoop = loopInBacktrace . bt
 safeToSpeculate :: Environment -> Bool
 safeToSpeculate = safeToSpeculateBT . bt
 
+safeToReadOnce :: Environment -> Bool
+safeToReadOnce = safeToReadOnceBT . bt
+
 fields :: Type -> Environment -> Maybe [FieldDecl]
 fields t env
   | isTraitType t = do
@@ -173,10 +177,10 @@ fields t env
     where
       translateField bindings f@Field{ftype} =
           f{ftype = replaceTypeVars bindings ftype}
-      specToVal fs f = if isSpecField f && fname f `elem` fs then
-                           f{fmods = [Val]}
-                       else
-                           f
+      specToVal fs f = if (isSpecField f || isOnceField f) &&
+                          fname f `elem` fs
+                       then f{fmods = [Val]}
+                       else f
       barredVarField fs f = fname f `elem` fs && isVarField f
 
 fieldLookup :: Type -> Name -> Environment -> Maybe FieldDecl
