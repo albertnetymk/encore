@@ -110,6 +110,7 @@ lexer =
     ,"linear"
     ,"consume"
     ,"borrowed"
+    ,"return"
    ],
    P.reservedOpNames = [
      ":"
@@ -677,6 +678,7 @@ highOrderExpr = adtExpr
 expr :: Parser Expr
 expr  =  unit
      <|> break
+     <|> return_
      <|> try embed
      <|> try path
      <|> try cat
@@ -734,6 +736,10 @@ expr  =  unit
       break = do pos <- getPosition
                  reserved "break"
                  return $ Break (meta pos)
+      return_ = do pos <- getPosition
+                   reserved "return"
+                   val <- option (Skip $ meta pos) expression
+                   return $ Return (meta pos) val
       path = do pos <- getPosition
                 root <- parens expression <|> try functionCall <|> varAccess <|> stringLit
                 first <- pathComponent

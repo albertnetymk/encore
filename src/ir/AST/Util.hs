@@ -30,6 +30,7 @@ import Identifiers
 getChildren :: Expr -> [Expr]
 getChildren Skip{} = []
 getChildren Break{} = []
+getChildren Return{val} = [val]
 getChildren TypedExpr {body} = [body]
 getChildren MethodCall {target, args} = target : args
 getChildren MessageSend {target, args} = target : args
@@ -106,6 +107,7 @@ getChildren Binop {loper, roper} = [loper, roper]
 putChildren :: [Expr] -> Expr -> Expr
 putChildren [] e@Skip{} = e
 putChildren [] e@Break{} = e
+putChildren [val] e@Return{} = e{val}
 putChildren [body] e@(TypedExpr {}) = e{body = body}
 putChildren (target : args) e@(MethodCall {}) = e{target = target, args = args}
 putChildren (target : args) e@(MessageSend {}) = e{target = target, args = args}
@@ -182,6 +184,7 @@ putChildren [loper, roper] e@(Binop {}) = e{loper = loper, roper = roper}
 -- -fwarn-incomplete-patterns help us find missing patterns
 putChildren _ e@Skip{} = error "'putChildren l Skip' expects l to have 0 elements"
 putChildren _ e@Break{} = error "'putChildren l Break' expects l to have 0 elements"
+putChildren _ e@Return{} = error "'putChildren l Return' expects l to have 1 element"
 putChildren _ e@(TypedExpr {}) = error "'putChildren l TypedExpr' expects l to have 1 element"
 putChildren _ e@(MaybeValue {}) = error "'putChildren l MaybeValue' expects l to have 1 element"
 putChildren _ e@(Tuple {}) = error "'putChildren l Tuple' expects l to have 1 element"
