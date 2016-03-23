@@ -503,7 +503,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
 
   translate (A.NewWithInit {A.ty, A.args})
     | Ty.isActiveClassType ty = delegateUse callTheMethodOneway
-    | Ty.isSharedClassType ty = delegateUse callTheMethodOneway
+    | Ty.isSharedClassType ty = delegateUse callTheMethodSync
     | otherwise = delegateUse callTheMethodSync
     where
       delegateUse methodCall =
@@ -765,7 +765,6 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
           fdecl <- gets $ Ctx.lookupField ty f
           return (f, translate $ A.ftype fdecl)
 
-
   translate m@(A.Match {A.arg, A.clauses}) =
       do retTmp <- Ctx.genNamedSym "match"
          (narg, targ) <- translate arg
@@ -1024,14 +1023,14 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
         witnessType = A.getType witness
         argType = A.getType arg
         theTargetAccess = ntarg `Arrow` field
+        two = (witnessType, argType)
         theArgs = [Amp theTargetAccess
                   ,unfreeze witnessType nwitness
                   ,unfreeze argType narg]
-        theCAS = Call (Nam "__sync_bool_compare_and_swap") theArgs
         isWritten = BinOp (Nam "==") (AsExpr narg) (freeze argType narg)
         theCond = if argIsOnce
-                  then BinOp (Nam "&&") isWritten theCAS
-                  else theCAS
+                  then BinOp (Nam "&&") isWritten $ theCAS theArgs two
+                  else theCAS theArgs two
         theAssign = Assign (Decl (bool, tmp)) theCond
         condNull = if Ty.isRefType $ A.getType arg
                    then Statement $ If tmp (Assign narg Null) Skip
@@ -1047,6 +1046,17 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
         return $ Assign residualVar $
                         Cast (translate argType) (unfreeze argType narg)
                         `Arrow` fieldName f
+      theCAS theArgs two =
+        let
+          (to_call, trace_f) =
+            case cat of
+              A.CAT{A.args = [_,A.FieldAccess{},A.VarAccess{}]} ->
+                (Nam "_CAS_LINK_WRAPPER", classTraceFnName $ snd two)
+              A.CAT{A.args = [_,A.VarAccess{},A.FieldAccess{}]} ->
+                (Nam "_CAS_UNLINK_WRAPPER", classTraceFnName $ fst two)
+              _ -> error "swap not supported"
+        in
+          Call to_call $ theArgs ++ [AsExpr $ AsLval trace_f]
 
   translate cat@(A.TryAssign{A.target = acc@A.FieldAccess{A.target, A.name},
                              A.arg}) = do
@@ -1060,7 +1070,8 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
     let theArgs = [Amp $ ntarg `Arrow` field
                   ,unfreeze accType nacc
                   ,freeze argType narg]
-        theCAS = Call (Nam "__sync_bool_compare_and_swap") theArgs
+        theCAS = Call (Nam "_CAS_TRY_WRAPPER") $
+          theArgs ++ [AsExpr $ AsLval $ classTraceFnName argType]
         isUnwritten = BinOp (Nam "==") (AsExpr nacc) (unfreeze accType nacc)
         theCond = BinOp (Nam "&&") isUnwritten theCAS
         theAssign = Assign (Decl (bool, tmp)) theCond

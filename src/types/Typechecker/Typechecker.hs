@@ -29,7 +29,6 @@ import Typechecker.TypeError
 import Typechecker.Util
 import Text.Printf (printf)
 
-
 -- | The top-level type checking function
 typecheckEncoreProgram :: Environment -> Program -> (Either TCError (Environment, Program), [TCWarning])
 typecheckEncoreProgram env p =
@@ -792,7 +791,6 @@ instance Checkable Expr where
            eBody <- typecheck body
            return $ setType (AST.getType eBody) while {cond = eCond, body = eBody}
 
-
     -- TODO
     -- -------------------------------
     --  E |- CAT(x.f, e1, e2) : bool
@@ -1142,7 +1140,6 @@ instance Checkable Expr where
            case varType of
              Just ty -> return $ setType ty var
              Nothing -> tcError $ UnboundVariableError name
-
 
     --  e : t \in E
     --  isLval e

@@ -4,6 +4,8 @@
 #include <ucontext.h>
 
 #define LAZY_IMPL
+// #define SO_ACTOR
+#define SO_LOCKFREE
 
 // Only useful when using `party_each` on an array.
 // It will split up the array into chunks and start processing the chunk using
@@ -33,6 +35,7 @@ static pony_type_t *ENCORE_ACTIVE    = (pony_type_t *)1;
 static pony_type_t *ENCORE_PRIMITIVE = (pony_type_t *)NULL;
 
 __pony_spec_align__(typedef struct encore_actor encore_actor_t, 64);
+__pony_spec_align__(typedef struct encore_so encore_so, 64);
 typedef struct encore_oneway_msg encore_oneway_msg_t;
 typedef struct encore_fut_msg encore_fut_msg_t;
 typedef struct encore_task_msg_s encore_task_msg_s;
@@ -171,6 +174,7 @@ void call_respond_with_current_scheduler();
 encore_arg_t default_task_handler(pony_ctx_t* ctx, void* env, void* dep);
 
 pony_ctx_t* encore_ctx();
+encore_actor_t *encore_current_actor();
 static inline void encore_trace_polymorphic_variable(
     pony_ctx_t* ctx,
     pony_type_t *type,

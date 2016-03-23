@@ -134,7 +134,9 @@ project "encore"
   c_lib()
   files {
     "../encore/encore.h",
-    "../encore/encore.c"
+    "../encore/encore.c",
+    "../encore/shared_object.h",
+    "../encore/shared_object.c"
   }
 
 project "array"
