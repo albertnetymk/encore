@@ -31,15 +31,6 @@ static void current_actor_inc(gc_t* gc)
   }
 }
 
-static void current_actor_inc_some(gc_t* gc, size_t rc)
-{
-  if(gc->rc_mark != gc->mark)
-  {
-    gc->rc_mark = gc->mark;
-    gc->rc += rc;
-  }
-}
-
 static void current_actor_dec(gc_t* gc)
 {
   if(gc->rc_mark != gc->mark)
@@ -47,16 +38,6 @@ static void current_actor_dec(gc_t* gc)
     gc->rc_mark = gc->mark;
     assert(gc->rc > 0);
     gc->rc--;
-  }
-}
-
-static void current_actor_dec_some(gc_t* gc, size_t rc)
-{
-  if(gc->rc_mark != gc->mark)
-  {
-    gc->rc_mark = gc->mark;
-    assert(gc->rc >= rc);
-    gc->rc -= rc;
   }
 }
 
@@ -220,7 +201,7 @@ void gc_lf_try_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
   }
 }
 
-void gc_double_inc_send(pony_ctx_t *ctx, void *p)
+void gc_sendobject_shallow(pony_ctx_t *ctx, void *p)
 {
   chunk_t* chunk = (chunk_t*)pagemap_get(p);
 
@@ -232,14 +213,14 @@ void gc_double_inc_send(pony_ctx_t *ctx, void *p)
   gc_t* gc = actor_gc(ctx->current);
 
   if(actor == ctx->current) {
-    current_actor_inc_some(gc, 2);
+    current_actor_inc(gc);
 
     // get the object
     object_t* obj = objectmap_getorput(&gc->local, p, gc->mark);
 
     if(!object_marked(obj, gc->mark)) {
       // inc, mark and recurse
-      object_inc_some(obj, 2);
+      object_inc(obj);
       object_mark(obj, gc->mark);
     }
     return;
@@ -265,7 +246,6 @@ void gc_double_inc_send(pony_ctx_t *ctx, void *p)
     // dec. if we can't, we need to build an acquire message
     if(!actorref_dec(aref)) {
       actorref_inc_more(aref);
-      actorref_dec(aref);
       acquire_actor(ctx, actor);
     }
 
@@ -278,7 +258,6 @@ void gc_double_inc_send(pony_ctx_t *ctx, void *p)
     // dec. if we can't, we need to build an acquire message
     if(!object_dec(obj)) {
       object_inc_more(obj);
-      object_dec(obj);
       acquire_object(ctx, actor, p);
     }
 
@@ -286,13 +265,13 @@ void gc_double_inc_send(pony_ctx_t *ctx, void *p)
   }
 }
 
-void gc_double_inc_send_done(pony_ctx_t *ctx)
+void gc_sendobject_shallow_done(pony_ctx_t *ctx)
 {
   gc_sendacquire(ctx);
   gc_done(actor_gc(ctx->current));
 }
 
-void gc_recv_address(pony_ctx_t *ctx, void *p)
+void gc_recvobject_shallow(pony_ctx_t *ctx, void *p)
 {
   chunk_t* chunk = (chunk_t*)pagemap_get(p);
 
@@ -346,7 +325,7 @@ void gc_recv_address(pony_ctx_t *ctx, void *p)
   }
 }
 
-void gc_recv_address_done(pony_ctx_t *ctx)
+void gc_recvobject_shallow_done(pony_ctx_t *ctx)
 {
   gc_done(actor_gc(ctx->current));
 }

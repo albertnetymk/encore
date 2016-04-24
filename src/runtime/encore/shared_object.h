@@ -55,6 +55,7 @@ typedef struct encore_so_t
 
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
 #define UNFREEZE(field) ((void*)(((uintptr_t)field) & ~1UL))
+void gc_sendobject_shallow(pony_ctx_t *ctx, void *p);
 
 #define _CAS_LINK_WRAPPER(X, Y, Z, F)            \
   ({                                             \
@@ -80,11 +81,17 @@ typedef struct encore_so_t
       so_lockfree_set_trace_boundary(_ctx, Z);        \
       pony_traceobject(_ctx, Y, F);                   \
       pony_gc_try_recv_done(_ctx);                    \
-      mv_tmp_to_acc(_ctx);                            \
+      so_lockfree_recv(_ctx);                         \
+      gc_sendobject_shallow(_ctx, Y);                 \
     }                                                 \
     ret;                                              \
   })                                                  \
 
+
+// #define _UNLINK_LEFTOVER(P)
+//   ({
+//    // deal with double bar ownership fields
+//   })
 
 #define _CAS_TRY_WRAPPER(X, Y, Z, F)             \
   ({                                             \
@@ -124,6 +131,7 @@ void pony_gc_try_recv(pony_ctx_t* ctx);
 void pony_gc_try_recv_done(pony_ctx_t *ctx);
 void so_lockfree_send(pony_ctx_t *ctx);
 void so_lockfree_unsend(pony_ctx_t *ctx);
+void so_lockfree_recv(pony_ctx_t *ctx);
 void mv_tmp_to_acc(pony_ctx_t *ctx);
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item);
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);

@@ -128,6 +128,7 @@ static bool handle_message(pony_ctx_t* ctx, pony_actor_t* actor,
 
 static void try_gc(pony_ctx_t* ctx, pony_actor_t* actor)
 {
+  // if (gc_disabled(ctx) || true) {
   if (gc_disabled(ctx)) {
     return;
   }

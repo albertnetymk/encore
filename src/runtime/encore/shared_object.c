@@ -132,12 +132,12 @@ static void clean_one(to_trace_t *item)
       if (!cur) {
         break;
       }
-      gc_recv_address(ctx, cur->address);
+      gc_recvobject_shallow(ctx, cur->address);
       pre = cur;
       cur = cur->next;
       POOL_FREE(trace_address_list, pre);
     }
-    gc_recv_address_done(ctx);
+    gc_recvobject_shallow_done(ctx);
   }
   POOL_FREE(to_trace_t, item);
 }
@@ -427,6 +427,7 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 
 void encore_so_finalinzer(void *p)
 {
+  return;
   assert(p);
   encore_so_t *this = p;
   assert(mpscq_pop(&this->so_gc.in_out_q) == NULL);
@@ -440,9 +441,9 @@ void so_lockfree_send(pony_ctx_t *ctx)
   void *p;
   while(ctx->lf_tmp_stack != NULL) {
     ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
-    gc_double_inc_send(ctx, p);
+    gc_sendobject_shallow(ctx, p);
   }
-  gc_double_inc_send_done(ctx);
+  gc_sendobject_shallow_done(ctx);
 }
 
 void so_lockfree_unsend(pony_ctx_t *ctx)
@@ -453,24 +454,34 @@ void so_lockfree_unsend(pony_ctx_t *ctx)
   }
 }
 
+void so_lockfree_recv(pony_ctx_t *ctx)
+{
+  void *p;
+  while(ctx->lf_tmp_stack != NULL) {
+    ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
+    gc_recvobject_shallow(ctx, p);
+  }
+  gc_recvobject_shallow_done(ctx);
+}
+
 void mv_tmp_to_acc(pony_ctx_t *ctx)
 {
   void *p;
   while(ctx->lf_tmp_stack != NULL) {
     ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
-    gc_recv_address(ctx, p);
-    ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
+    gc_recvobject_shallow(ctx, p);
+    // ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
   }
-  gc_recv_address_done(ctx);
+  gc_recvobject_shallow_done(ctx);
 }
 
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item)
 {
-  void *p;
-  while(ctx->lf_acc_stack != NULL) {
-    ctx->lf_acc_stack = gcstack_pop(ctx->lf_acc_stack, &p);
-    so_to_trace(item, p);
-  }
+  // void *p;
+  // while(ctx->lf_acc_stack != NULL) {
+  //   ctx->lf_acc_stack = gcstack_pop(ctx->lf_acc_stack, &p);
+  //   so_to_trace(item, p);
+  // }
 }
 
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p)
