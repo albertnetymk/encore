@@ -330,6 +330,14 @@ classTraceFnName :: Ty.Type -> CCode Name
 classTraceFnName clazz =
     Nam $ encoreName "trace" (Ty.getId clazz)
 
+class_inverse_trace_fn_name :: Ty.Type -> CCode Name
+class_inverse_trace_fn_name clazz =
+    Nam $ encoreName "inverse_trace" $ Ty.getId clazz
+
+class_inverse_field_trace_fn_name :: Ty.Type -> ID.Name -> CCode Name
+class_inverse_field_trace_fn_name clazz field =
+    Nam $ encoreName ("inverse_" ++ show field ++ "_trace") $ Ty.getId clazz
+
 runtimeTypeInitFnName :: Ty.Type -> CCode Name
 runtimeTypeInitFnName clazz =
     Nam $ encoreName "type_init" (Ty.getId clazz)

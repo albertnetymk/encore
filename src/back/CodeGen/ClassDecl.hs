@@ -447,6 +447,7 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [traitMethodSelector ctable cdecl] ++
     [typeStructDecl cdecl] ++
     [runtimeTypeInitFunDecl cdecl] ++
+    [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
     [constructorImpl Shared cname] ++
     methodImpls ++
@@ -490,7 +491,6 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
           [assignFut] ++
           prep_lf_entry thisName ++
           [fulfil_fut] ++
-          -- [assignFut] ++
           prep_lf_exit thisName ++
           [retStmt]
       in
@@ -552,6 +552,7 @@ translatePassiveClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     (LocalInclude "header.h") :
     [traitMethodSelector ctable cdecl] ++
     [runtimeTypeInitFunDecl cdecl] ++
+    [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
     [constructorImpl Passive cname] ++
     methodImpls ++
@@ -610,6 +611,35 @@ runtimeTypeInitFunDecl A.Class{A.cname, A.cfields, A.cmethods} =
               Assign (Var "this" `Arrow` typeVarRefName ty)
                      (Call (Nam "va_arg") [Var "params", Var "pony_type_t *"])
 
+inverse_trace_fun_decls :: A.ClassDecl -> CCode Toplevel
+inverse_trace_fun_decls A.Class{A.cname, A.cfields, A.cmethods} =
+  Concat $
+    [Function void (class_inverse_trace_fn_name cname)
+           [(Ptr encoreCtxT, encoreCtxVar), (Ptr void, Var "p")]
+           (Seq $
+            (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+                    (Var "p")) :
+             map traceField cfields)
+    ] ++
+    [Function void (class_inverse_field_trace_fn_name cname $ A.fname field)
+           [(Ptr encoreCtxT, encoreCtxVar), (Ptr void, Var "p")]
+           (Seq $
+            (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+                    (Var "p")) :
+             map traceField (cfields \\ [field]))
+    | field <- cfields]
+  where
+    white_list = [A.Spec, A.Once]
+
+    traceField A.Field {A.fmods, A.ftype, A.fname}
+      | null $ fmods `intersect` white_list =
+          Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
+      | otherwise =
+        let var = Var . show $ fieldName fname
+            field = Var "_this" `Arrow` fieldName fname
+            fieldAssign = Assign (Decl (translate ftype, var)) field
+        in Seq [fieldAssign, inverse_trace_variable ftype var]
+
 tracefunDecl :: A.ClassDecl -> CCode Toplevel
 tracefunDecl A.Class{A.cname, A.cfields, A.cmethods} =
     case find ((== Ty.getId cname ++ "_trace") . show . A.methodName) cmethods of
@@ -638,7 +668,7 @@ tracefunDecl A.Class{A.cname, A.cfields, A.cmethods} =
 
       traceField A.Field {A.fmods, A.ftype, A.fname}
         | not . null $ fmods `intersect` skipping_list =
-          Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
+            Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
         | otherwise =
           let var = Var . show $ fieldName fname
               field = Var "_this" `Arrow` fieldName fname

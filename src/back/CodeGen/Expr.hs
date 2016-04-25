@@ -1059,16 +1059,17 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
                         Cast (translate argType) (unfreeze argType narg)
                         `Arrow` fieldName f
       theCAS theArgs two =
-        let
-          (to_call, trace_f) =
-            case cat of
-              A.CAT{A.args = [_,A.FieldAccess{},A.VarAccess{}]} ->
-                (Nam "_CAS_LINK_WRAPPER", classTraceFnName $ snd two)
-              A.CAT{A.args = [_,A.VarAccess{},A.FieldAccess{}]} ->
-                (Nam "_CAS_UNLINK_WRAPPER", classTraceFnName $ fst two)
-              _ -> error "swap not supported"
-        in
-          Call to_call $ theArgs ++ [AsExpr $ AsLval trace_f]
+        case cat of
+          A.CAT{A.args = [_,A.FieldAccess{},A.VarAccess{}]} ->
+            Call (Nam "_CAS_LINK_WRAPPER") $
+              theArgs ++ [AsExpr $ AsLval $ classTraceFnName $ snd two]
+          A.CAT{A.args = [_,A.VarAccess{},A.FieldAccess{}]} ->
+            Call (Nam "_CAS_UNLINK_WRAPPER") $
+              theArgs ++
+              [AsExpr $ AsLval $ classTraceFnName $ fst two] ++
+              [AsExpr $ AsLval $
+                class_inverse_field_trace_fn_name (A.getType target) name]
+          _ -> error "swap not supported"
 
   translate cat@(A.TryAssign{A.target = acc@A.FieldAccess{A.target, A.name},
                              A.arg}) = do

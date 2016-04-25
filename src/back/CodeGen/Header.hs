@@ -80,6 +80,9 @@ generateHeader p =
     [commentSection "Trace functions"] ++
     traceFnDecls ++
 
+    [commentSection "Reverse trace functions"] ++
+    reverse_trace_fn_decls ++
+
     [commentSection "Runtime type init functions"] ++
     runtimeTypeFnDecls ++
 
@@ -161,6 +164,17 @@ generateHeader p =
          where
            traceFnDecl A.Class{A.cname} =
                FunctionDecl void (classTraceFnName cname) [Ptr encoreCtxT,Ptr void]
+     reverse_trace_fn_decls = map reverse_trace allclasses
+       where
+         reverse_trace A.Class{A.cname, A.cfields} =
+           Concat $
+             [FunctionDecl void (class_inverse_trace_fn_name cname)
+               [Ptr encoreCtxT,Ptr void]
+             ] ++
+             [FunctionDecl void
+               (class_inverse_field_trace_fn_name cname $ A.fname field)
+               [Ptr encoreCtxT,Ptr void]
+             | field <- cfields]
 
      runtimeTypeFnDecls = map runtimeTypeFnDecl allclasses
          where

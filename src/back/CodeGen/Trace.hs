@@ -1,5 +1,6 @@
 module CodeGen.Trace (
   traceVariable
+  , inverse_trace_variable
   , traceFuture
   , traceStream
   , tracefunCall
@@ -41,6 +42,12 @@ trace var =
 traceActor :: CCode Lval -> CCode Stat
 traceActor var =
   Statement $ Call ponyTraceActor  [AsExpr encoreCtxVar, Cast (Ptr ponyActorT) var]
+
+inverse_trace_variable :: Ty.Type -> CCode Lval -> CCode Stat
+inverse_trace_variable t var
+  | Ty.isPassiveClassType t = traceObject var $ class_inverse_trace_fn_name t
+  | otherwise =
+    Embed $ "/* Not tracing field '" ++ show var ++ "' */"
 
 traceObject :: (UsableAs e Expr) => CCode Lval -> CCode e -> CCode Stat
 traceObject var f =

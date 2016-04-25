@@ -72,20 +72,26 @@ typedef struct encore_so_t
     ret;                                         \
   })                                             \
 
-#define _CAS_UNLINK_WRAPPER(X, Y, Z, F)               \
-  ({                                                  \
-    bool ret = __sync_bool_compare_and_swap(X, Y, Z); \
-    if (ret) {                                        \
-      pony_gc_try_recv(_ctx);                         \
-      so_lockfree_set_trace_boundary(_ctx, Z);        \
-      pony_traceobject(_ctx, Y, F);                   \
-      pony_gc_try_recv_done(_ctx);                    \
-      so_lockfree_recv(_ctx);                         \
-      gc_sendobject_shallow(_ctx, Y);                 \
-    }                                                 \
-    ret;                                              \
-  })                                                  \
-
+#define _CAS_UNLINK_WRAPPER(X, Y, Z, F, IF)             \
+  ({                                                    \
+    pony_gc_try_recv(_ctx);                             \
+    so_lockfree_set_trace_boundary(_ctx, NULL);         \
+    pony_traceobject(_ctx, _this, IF);                  \
+    pony_gc_try_recv_done(_ctx);                        \
+    bool reachable = so_lockfree_is_reachable(_ctx, Y); \
+    bool ret = __sync_bool_compare_and_swap(X, Y, Z);   \
+    if (ret) {                                          \
+      pony_gc_try_recv(_ctx);                           \
+      so_lockfree_set_trace_boundary(_ctx, Z);          \
+      pony_traceobject(_ctx, Y, F);                     \
+      pony_gc_try_recv_done(_ctx);                      \
+      so_lockfree_recv(_ctx);                           \
+      if (!reachable) {                                 \
+        so_lockfree_delay_recv_using_send(_ctx, Y);     \
+      }                                                 \
+    }                                                   \
+    ret;                                                \
+  })                                                    \
 
 // #define _UNLINK_LEFTOVER(P)
 //   ({
@@ -131,7 +137,8 @@ void pony_gc_try_recv_done(pony_ctx_t *ctx);
 void so_lockfree_send(pony_ctx_t *ctx);
 void so_lockfree_unsend(pony_ctx_t *ctx);
 void so_lockfree_recv(pony_ctx_t *ctx);
-void mv_tmp_to_acc(pony_ctx_t *ctx);
+bool so_lockfree_is_reachable(pony_ctx_t *ctx, void *target);
+void so_lockfree_delay_recv_using_send(pony_ctx_t *ctx, void *p);
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item);
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);
 #endif /* end of include guard: SHARED_OBJECT_H_L6JOK8YX */
