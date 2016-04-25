@@ -8,6 +8,26 @@
 #include <stdio.h>
 #include <stdint.h>
 
+static inline void gc_sendobject_shallow(pony_ctx_t *ctx, void *p)
+{
+  gc_sendobject(ctx, p, NULL);
+}
+
+static inline void gc_sendobject_shallow_done(pony_ctx_t *ctx)
+{
+  pony_send_done(ctx);
+}
+
+static inline void gc_recvobject_shallow(pony_ctx_t *ctx, void *p)
+{
+  gc_recvobject(ctx, p, NULL);
+}
+
+static inline void gc_recvobject_shallow_done(pony_ctx_t *ctx)
+{
+  pony_recv_done(ctx);
+}
+
 typedef struct queue_node_t
 {
   void* data;
@@ -144,6 +164,7 @@ static void clean_one(to_trace_t *item)
 
 static void collect(encore_so_t *this)
 {
+  // return;
   dwcas_t cmp, xchg;
   so_gc_t *so_gc = &this->so_gc;
   duration_t *d = mpscq_pop(&so_gc->duration_q);
@@ -157,8 +178,12 @@ static void collect(encore_so_t *this)
     cmp.current = d;
     xchg.aba = cmp.aba + 1;
     xchg.current = NULL;
+    assert(cmp.aba == _atomic_load(&so_gc->cas_d.aba));
+    assert(cmp.current == _atomic_load(&so_gc->cas_d.current));
     bool success = _atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw);
-    assert(success);
+    if (!success) {
+      return;
+    }
     d = mpscq_peek(&so_gc->duration_q);
     if (d == NULL || _atomic_load(&d->collectable) != 1) {
       return;
@@ -464,24 +489,31 @@ void so_lockfree_recv(pony_ctx_t *ctx)
   gc_recvobject_shallow_done(ctx);
 }
 
-void mv_tmp_to_acc(pony_ctx_t *ctx)
+bool so_lockfree_is_reachable(pony_ctx_t *ctx, void *target)
 {
+  bool ret = false;
   void *p;
   while(ctx->lf_tmp_stack != NULL) {
     ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
-    gc_recvobject_shallow(ctx, p);
-    // ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
+    ret = ret || p == target;
   }
-  gc_recvobject_shallow_done(ctx);
+  return ret;
+}
+
+void so_lockfree_delay_recv_using_send(pony_ctx_t *ctx, void *p)
+{
+  gc_sendobject(ctx, p, NULL);
+  pony_send_done(ctx);
+  ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
 }
 
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item)
 {
-  // void *p;
-  // while(ctx->lf_acc_stack != NULL) {
-  //   ctx->lf_acc_stack = gcstack_pop(ctx->lf_acc_stack, &p);
-  //   so_to_trace(item, p);
-  // }
+  void *p;
+  while(ctx->lf_acc_stack != NULL) {
+    ctx->lf_acc_stack = gcstack_pop(ctx->lf_acc_stack, &p);
+    so_to_trace(item, p);
+  }
 }
 
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p)

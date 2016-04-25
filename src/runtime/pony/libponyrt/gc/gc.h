@@ -30,14 +30,6 @@ void gc_lf_try_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
 
 void gc_lf_try_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
 
-void gc_sendobject_shallow(pony_ctx_t *ctx, void *p);
-
-void gc_sendobject_shallow_done(pony_ctx_t *ctx);
-
-void gc_recvobject_shallow(pony_ctx_t *ctx, void *p);
-
-void gc_recvobject_shallow_done(pony_ctx_t *ctx);
-
 void gc_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
 
 void gc_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);

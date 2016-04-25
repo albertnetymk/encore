@@ -55,7 +55,6 @@ typedef struct encore_so_t
 
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
 #define UNFREEZE(field) ((void*)(((uintptr_t)field) & ~1UL))
-void gc_sendobject_shallow(pony_ctx_t *ctx, void *p);
 
 #define _CAS_LINK_WRAPPER(X, Y, Z, F)            \
   ({                                             \
