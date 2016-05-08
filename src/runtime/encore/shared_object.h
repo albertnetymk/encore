@@ -5,13 +5,30 @@
 
 typedef struct queue_node_t queue_node_t;
 
-typedef struct mpscq_t
+__pony_spec_align__(
+  typedef struct {
+    union {
+      struct {
+        queue_node_t* node_of_head;
+        queue_node_t* head;
+      };
+      dw_t dw;
+    };
+  } double_head_t, 16
+);
+
+typedef struct double_head_mpscq_t
 {
-  queue_node_t* head;
+  double_head_t double_head;
   queue_node_t* tail;
-} mpscq_t;
+} double_head_mpscq_t;
 
 typedef struct duration_t duration_t;
+
+typedef struct duration_list_t {
+  duration_t *head;
+  duration_t *tail;
+} duration_list_t;
 
 __pony_spec_align__(
   typedef struct dwcas_t {
@@ -25,12 +42,24 @@ __pony_spec_align__(
   } dwcas_t, 16
 );
 
+typedef struct {
+  union {
+    struct {
+      uint32_t aba;
+      uint32_t entry;
+    };
+    uint64_t dw;
+  };
+} aba_entry_t;
+
 typedef struct so_gc_t {
+  uint32_t start_index;
+  bool closed;
+  aba_entry_t aba_entry;
   dwcas_t cas;
-  queue_node_t *node_of_head;
-  mpscq_t in_out_q;
+  double_head_mpscq_t in_out_q;
   dwcas_t cas_d;
-  mpscq_t duration_q;
+  duration_list_t duration_list;
 } so_gc_t;
 
 typedef struct encore_so_t
