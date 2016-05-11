@@ -359,6 +359,10 @@ static queue_node_t *next_node(double_head_mpscq_t *q, queue_node_t *node)
   } while (true);
 }
 
+// currend_d is closing; set new duration by selecting the first non-exited
+// item in in_out_q from node_of_head. Need duration entry info so that we know
+// how much to advance, and busy wait if the push-to-queue operation has not
+// completed
 static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
 {
   // single thread
@@ -418,6 +422,8 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
   _atomic_store(&so_gc->closed, false);
 }
 
+// caller would wait until the current duration becomes open, increment the
+// entry counter, and push itself into in_out_q
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
 {
   dwcas_t cmp, xchg;
@@ -469,6 +475,9 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   }
 }
 
+// head would closes its duration, try to set a new duration and try to set the
+// current duration collectible. If head doesn't belong to the current
+// duration, it would additionally set its own duration collectible
 static void exit_as_head(encore_so_t *this, duration_t *current_d,
     to_trace_t *item)
 {
@@ -490,6 +499,9 @@ static void exit_as_head(encore_so_t *this, duration_t *current_d,
   set_collectable(this, current_d);
 }
 
+// increment exit or legacy counter depending on if the duration is closed
+// exited items would be collected if the duration becomes collectible, while
+// legacy counter merely determines when the duration becomes collectible
 static void exit_as_not_head(encore_so_t *this, to_trace_t *item)
 {
   closed_and_exit_t old_closed_and_exit;
@@ -512,6 +524,8 @@ static void exit_as_not_head(encore_so_t *this, to_trace_t *item)
   } while (true);
 }
 
+// delegate to exit_as_head and exit_as_not_head, need to wait for the new
+// duration if selected as the head candidate
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
