@@ -56,7 +56,7 @@ typedef struct duration_t {
   uint32_t entry;
   uint32_t legacy;
   closed_and_exit_t closed_and_exit;
-  bool collectable;
+  bool collectible;
   struct duration_t *next;
 } duration_t;
 
@@ -273,7 +273,7 @@ static void collect(encore_so_t *this)
   so_gc_t *so_gc = &this->so_gc;
   duration_t *d = duration_list_pop(&so_gc->duration_list);
   do {
-    assert(d->collectable);
+    assert(d->collectible);
     for (size_t i = 0; i < d->closed_and_exit.exit; ++i) {
       clean_one(double_head_mpscq_pop(&so_gc->in_out_q));
     }
@@ -286,34 +286,34 @@ static void collect(encore_so_t *this)
     assert(ret);
     // _atomic_store(&so_gc->cas_d.dw, xchg.dw);
     d = duration_list_peek(&so_gc->duration_list);
-    if (d == NULL || !_atomic_load(&d->collectable)) {
+    if (d == NULL || !_atomic_load(&d->collectible)) {
       return;
     }
     cmp.aba = xchg.aba;
     cmp.current = NULL;
     xchg.aba = cmp.aba + 1;
     xchg.current = d;
-    // racing with set_collectable
+    // racing with set_collectible
     if (!_atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw)) {
       return;
     }
   } while (true);
 }
 
-static void set_collectable(encore_so_t *this, duration_t *d)
+static void set_collectible(encore_so_t *this, duration_t *d)
 {
   // multithread entry
   // called by any thread on exiting so
   if (!_atomic_load(&d->closed_and_exit.closed)) { return; }
-  if (_atomic_load(&d->collectable)) { return; }
+  if (_atomic_load(&d->collectible)) { return; }
 
   if (_atomic_load(&d->closed_and_exit.exit) + d->legacy ==
       _atomic_load(&d->entry)) {
     dwcas_t cmp, xchg;
-    bool old_collectable = false;
+    bool old_collectible = false;
     to_trace_t *head = d->head;
     so_gc_t *so_gc = &this->so_gc;
-    if (_atomic_cas(&d->collectable, &old_collectable, true)) {
+    if (_atomic_cas(&d->collectible, &old_collectible, true)) {
       if (double_head_mpscq_peek(&this->so_gc.in_out_q) == head) {
         cmp.aba = _atomic_load(&so_gc->cas_d.aba);
         cmp.current = NULL;
@@ -335,7 +335,7 @@ static duration_t *duration_new(to_trace_t *head)
   new->legacy = 0;
   new->closed_and_exit.closed = false;
   new->closed_and_exit.exit = 0;
-  new->collectable = false;
+  new->collectible = false;
   new->next = NULL;
   return new;
 }
@@ -372,7 +372,7 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
 
   assert(current_d);
   assert(current_d->closed_and_exit.closed);
-  assert(!current_d->collectable);
+  assert(!current_d->collectible);
   assert(node);
   assert(node->data == current_d->head);
 
@@ -494,9 +494,9 @@ static void exit_as_head(encore_so_t *this, duration_t *current_d,
   } else {
     assert(_atomic_load(&item->duration->closed_and_exit.closed));
     _atomic_add(&item->duration->legacy, 1);
-    set_collectable(this, item->duration);
+    set_collectible(this, item->duration);
   }
-  set_collectable(this, current_d);
+  set_collectible(this, current_d);
 }
 
 // increment exit or legacy counter depending on if the duration is closed
@@ -509,7 +509,7 @@ static void exit_as_not_head(encore_so_t *this, to_trace_t *item)
   do {
     if (old_closed_and_exit.closed) {
       _atomic_add(&item->duration->legacy, 1);
-      set_collectable(this, item->duration);
+      set_collectible(this, item->duration);
       return;
     }
     assert(!old_closed_and_exit.closed);
@@ -518,7 +518,7 @@ static void exit_as_not_head(encore_so_t *this, to_trace_t *item)
     if (_atomic_cas(&item->duration->closed_and_exit.dw,
           &old_closed_and_exit.dw,
           new_closed_and_exit.dw)) {
-        set_collectable(this, item->duration);
+        set_collectible(this, item->duration);
         return;
     }
   } while (true);
