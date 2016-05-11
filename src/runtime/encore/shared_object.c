@@ -407,7 +407,7 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
       break;
     }
     // next duration
-    d_iter = d_iter->next;
+    d_iter = _atomic_load(&d_iter->next);
   } while (true);
 
   _atomic_store(&so_gc->in_out_q.double_head.node_of_head, node);
