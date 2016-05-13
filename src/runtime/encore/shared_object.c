@@ -86,6 +86,7 @@ static void mpscq_init(mpscq_t* q)
 
 static void mpscq_destroy(mpscq_t* q)
 {
+  assert(_atomic_load(&q->head) == _atomic_load(&q->tail));
   POOL_FREE(queue_node_t, q->tail);
 }
 
@@ -125,17 +126,6 @@ static void *mpscq_pop(mpscq_t *q)
   return data;
 }
 
-static void *mpscq_peek(mpscq_t *q)
-{
-  queue_node_t *tail = _atomic_load(&q->tail);
-
-  queue_node_t *next = _atomic_load(&tail->next);
-  if (next == NULL) {
-    return NULL;
-  }
-  return next->data;
-}
-
 static void double_head_mpscq_init(double_head_mpscq_t* q)
 {
   queue_node_t* node = POOL_ALLOC(queue_node_t);
@@ -148,7 +138,9 @@ static void double_head_mpscq_init(double_head_mpscq_t* q)
 
 static void double_head_mpscq_destroy(double_head_mpscq_t* q)
 {
-  mpscq_destroy((mpscq_t *)q);
+  assert(_atomic_load(&q->double_head.head) == _atomic_load(&q->tail));
+  assert(_atomic_load(&q->double_head.node_of_head) == NULL);
+  POOL_FREE(queue_node_t, q->tail);
 }
 
 static void* double_mpscq_init_push(double_head_mpscq_t *q, void *data)
@@ -161,12 +153,16 @@ static void* double_mpscq_init_push(double_head_mpscq_t *q, void *data)
   cmp = q->double_head;
   cmp.node_of_head = NULL;
   xchg.head = xchg.node_of_head = node;
-  if ( _atomic_dwcas(&q->double_head.dw, &cmp.dw, xchg.dw)) {
-    return data;
-  } else {
-    POOL_FREE(queue_node_t, node);
-    assert(cmp.node_of_head);
-    return cmp.node_of_head->data;
+  while (true) {
+    if (_atomic_dwcas(&q->double_head.dw, &cmp.dw, xchg.dw)) {
+      _atomic_store(&cmp.head->next, node);
+      return data;
+    } else {
+      if (cmp.node_of_head) {
+        POOL_FREE(queue_node_t, node);
+        return cmp.node_of_head->data;
+      }
+    }
   }
 }
 
@@ -183,12 +179,27 @@ static void *double_head_mpscq_push(double_head_mpscq_t *q, void *data)
 
 static void *double_head_mpscq_pop(double_head_mpscq_t *q)
 {
-  return mpscq_pop((mpscq_t*) q);
+  queue_node_t *tail = q->tail;
+  queue_node_t *next = _atomic_load(&tail->next);
+
+  if (next == NULL) {
+    return NULL;
+  }
+  void *data = next->data;
+  q->tail = next;
+  POOL_FREE(queue_node_t, tail);
+  return data;
 }
 
 static void *double_head_mpscq_peek(double_head_mpscq_t *q)
 {
-  return mpscq_peek((mpscq_t *) q);
+  queue_node_t *tail = _atomic_load(&q->tail);
+  queue_node_t *next = _atomic_load(&tail->next);
+
+  if (next == NULL) {
+    return NULL;
+  }
+  return next->data;
 }
 
 static void duration_list_init(duration_list_t *list)
@@ -211,7 +222,7 @@ static void duration_list_push(duration_list_t *list, duration_t *d)
 static duration_t* duration_list_pop(duration_list_t *list)
 {
   if (!_atomic_load(&list->tail)) {
-    assert(_atomic_load(&list->head));
+    assert(_atomic_load(&list->head) == NULL);
     return NULL;
   }
   duration_t *ret = list->tail;
@@ -224,11 +235,12 @@ static duration_t* duration_list_pop(duration_list_t *list)
 
 static duration_t* duration_list_peek(duration_list_t *list)
 {
-  if (!list->tail) {
-    assert(list->head);
+  duration_t *tail = _atomic_load(&list->tail);
+  if (!tail) {
+    assert(_atomic_load(&list->head) == NULL);
     return NULL;
   }
-  return list->tail;
+  return tail;
 }
 
 // caller needs to ensure no gc is happening while traversing through node list
@@ -282,8 +294,8 @@ static void collect(encore_so_t *this)
     cmp.current = d;
     xchg.aba = cmp.aba + 1;
     xchg.current = NULL;
-    bool ret = _atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw);
-    assert(ret);
+    bool _ret = _atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw);
+    assert(_ret);
     // _atomic_store(&so_gc->cas_d.dw, xchg.dw);
     d = duration_list_peek(&so_gc->duration_list);
     if (d == NULL || !_atomic_load(&d->collectible)) {
@@ -297,6 +309,7 @@ static void collect(encore_so_t *this)
     if (!_atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw)) {
       return;
     }
+    d = duration_list_pop(&so_gc->duration_list);
   } while (true);
 }
 
@@ -320,7 +333,7 @@ static void set_collectible(encore_so_t *this, duration_t *d)
         xchg.aba = cmp.aba + 1;
         xchg.current = d;
         if (_atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw)) {
-          collect(this);
+          // collect(this);
         }
       }
     }
@@ -363,7 +376,8 @@ static queue_node_t *next_node(double_head_mpscq_t *q, queue_node_t *node)
 // item in in_out_q from node_of_head. Need duration entry info so that we know
 // how much to advance, and busy wait if the push-to-queue operation has not
 // completed
-static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
+static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d,
+    uintptr_t new_aba)
 {
   // single thread
   // called by head of duration on exit
@@ -392,8 +406,10 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
         if (_atomic_cas(&item->head_candidate, &old_head_candidate, 1)) {
           d = duration_new(item);
           // head is in the new duration by default
-          assert(_atomic_load(&so_gc->aba_entry.entry) == 0);
-          _atomic_store(&so_gc->aba_entry.entry, 1);
+          uint32_t entry = 0;
+          bool _r = _atomic_cas(&so_gc->aba_entry.entry, &entry, 1);
+          assert(_r);
+          // so_gc->aba_entry.entry = 1;
           break;
         }
       }
@@ -404,21 +420,24 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
     }
     start_index = 0;
     if (d_iter == current_d) {
+      node = NULL;
       break;
     }
     // next duration
     d_iter = _atomic_load(&d_iter->next);
   } while (true);
 
+  assert(d ? true : node == NULL);
   _atomic_store(&so_gc->in_out_q.double_head.node_of_head, node);
   _atomic_store(&so_gc->start_index, start_index);
   dwcas_t cmp, xchg;
-  xchg.dw = cmp.dw = _atomic_load(&so_gc->cas.dw);
+  cmp.current = current_d;
   xchg.current = d;
-  xchg.aba++;
+  // aba incremented before
+  xchg.aba = cmp.aba = new_aba;
   bool ret = _atomic_dwcas(&so_gc->cas.dw, &cmp.dw, xchg.dw);
   assert(ret);
-  // _atomic_store(&so_gc->cas.dw, xchg.dw);
+  // _atomic_store(&so_gc->cas.current, xchg.current);
   _atomic_store(&so_gc->closed, false);
 }
 
@@ -435,7 +454,7 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   bool entered = false;
   do {
     cmp.current = _atomic_load(&so_gc->cas.current);
-    cmp.aba = _atomic_load(&so_gc->cas.aba);
+    uintptr_t old_aba = cmp.aba = _atomic_load(&so_gc->cas.aba);
     if (_atomic_load(&so_gc->closed)) {
       relax();
       continue;
@@ -448,7 +467,7 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
         cmp.current = xchg.current;
       } else {
         POOL_FREE(duration_t, xchg.current);
-        if (!cmp.current) {
+        if (cmp.aba != old_aba) {
           // aba invalid
           continue;
         }
@@ -484,11 +503,12 @@ static void exit_as_head(encore_so_t *this, duration_t *current_d,
   so_gc_t *so_gc = &this->so_gc;
   _atomic_store(&so_gc->closed, true);
   _atomic_add(&so_gc->aba_entry.aba, 1);
+  uintptr_t new_aba = __atomic_add_fetch(&so_gc->cas.aba, 1, __ATOMIC_RELEASE);
   _atomic_store(&current_d->entry,
       _atomic_exchange(&so_gc->aba_entry.entry, 0));
   _atomic_store(&current_d->closed_and_exit.closed, true);
   duration_list_push(&so_gc->duration_list, current_d);
-  set_new_current_duration(so_gc, current_d);
+  set_new_current_duration(so_gc, current_d, new_aba);
   if (item->duration == current_d) {
     _atomic_add(&current_d->closed_and_exit.exit, 1);
   } else {
