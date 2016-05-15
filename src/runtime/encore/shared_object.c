@@ -426,41 +426,49 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
   assert(d ? true : node == NULL);
   _atomic_store(&so_gc->in_out_q.double_head.node_of_head, node);
   _atomic_store(&so_gc->start_index, start_index);
-  bool ret = _atomic_dwcas(&so_gc->current_d, &current_d, d);
-  assert(ret);
-  _atomic_store(&so_gc->current_d, d);
-  _atomic_add(&so_gc->aba_entry.aba, 1);
+  assert(_atomic_load(&so_gc->cas.current) == current_d);
+  dwcas_t xchg = { .aba = _atomic_load(&so_gc->cas.aba) + 1, .current = d };
+  _atomic_store(&so_gc->cas.dw, xchg.dw);
+  uint32_t current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
+  assert(current_aba % 2 == 1);
 }
 
 // caller would wait until the current duration becomes open, increment the
 // entry counter, and push itself into in_out_q
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
 {
-  duration_t *current_d;
+  dwcas_t cmp, xchg;
   so_gc_t *so_gc = &this->so_gc;
   assert(so_gc->in_out_q.double_head.head);
   aba_entry_t aba_entry, new_aba_entry;
-  aba_entry.dw = _atomic_load(&so_gc->aba_entry.dw);
-  uint32_t current_aba = aba_entry.aba;
+  uint32_t current_aba;
   to_trace_t *head_item = NULL;
   bool entered = false;
   do {
     current_aba = _atomic_load(&so_gc->aba_entry.aba);
-    current_d = _atomic_load(&so_gc->current_d);
+    // read duration after entry aba to avoid duration entry mismatch
+    cmp.dw = _atomic_load(&so_gc->cas.dw);
     if (current_aba % 2 != 0) {
       relax();
       continue;
     }
-    if (current_d == NULL) {
+    if (cmp.current == NULL) {
       head_item = double_mpscq_init_push(&so_gc->in_out_q, item);
-      duration_t *new_d = duration_new(head_item);
-      if (_atomic_cas(&so_gc->current_d, &current_d, new_d)) {
-        current_d = new_d;
+      assert(head_item);
+      xchg.aba = cmp.aba + 1;
+      xchg.current = duration_new(head_item);
+      // using dw to avoid using obsolete head_item
+      if (_atomic_dwcas(&so_gc->cas.dw, &cmp.dw, xchg.dw)) {
+        cmp.current = xchg.current;
       } else {
-        POOL_FREE(duration_t, new_d);
+        POOL_FREE(duration_t, xchg.current);
+        if (!cmp.current) {
+          // read after set_new_current_duration
+          continue;
+        }
       }
     }
-    assert(current_d);
+    assert(cmp.current);
     new_aba_entry.aba = aba_entry.aba = current_aba;
     aba_entry.entry = _atomic_load(&so_gc->aba_entry.entry);
     do {
@@ -476,7 +484,7 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
     } while (true);
   } while (!entered);
 
-  item->duration = current_d;
+  item->duration = cmp.current;
   if (head_item != item) {
     double_head_mpscq_push(&so_gc->in_out_q, item);
   }
@@ -489,7 +497,8 @@ static void exit_as_head(encore_so_t *this, duration_t *current_d,
     to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
-  _atomic_add(&so_gc->aba_entry.aba, 1);
+  uint32_t current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
+  assert(current_aba % 2 == 0);
   _atomic_store(&current_d->entry,
       _atomic_exchange(&so_gc->aba_entry.entry, 0));
   _atomic_store(&current_d->closed_and_exit.closed, true);
@@ -535,10 +544,16 @@ static void exit_as_not_head(encore_so_t *this, to_trace_t *item)
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
-  duration_t *current_d = _atomic_load(&so_gc->current_d);
+  duration_t *current_d = _atomic_load(&so_gc->cas.current);
   assert(current_d);
   _atomic_store(&item->exited, true);
   if (current_d->head == item) {
+    if (_atomic_load(&item->head_candidate) == 1) {
+      // wait until set_new_current_duration ends
+      while (_atomic_load(&so_gc->aba_entry.aba) % 2 != 0) {
+        relax();
+      }
+    }
     exit_as_head(this, current_d, item);
   } else {
     int old_head_candidate = 0;
@@ -546,13 +561,13 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
       exit_as_not_head(this, item);
     } else {
       do {
-        if (_atomic_load(&so_gc->current_d)->head == item &&
+        if (_atomic_load(&so_gc->cas.current)->head == item &&
             _atomic_load(&so_gc->aba_entry.aba) % 2 == 0) {
           break;
         }
         relax();
       } while (true);
-      current_d = _atomic_load(&so_gc->current_d);
+      current_d = _atomic_load(&so_gc->cas.current);
       assert(current_d);
       assert(current_d->head == item);
       exit_as_head(this, current_d, item);
@@ -565,7 +580,7 @@ encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
   encore_so_t *this = (encore_so_t*) encore_create(ctx, type);
   this->so_gc.start_index = 0;
   this->so_gc.aba_entry.dw = 0;
-  this->so_gc.current_d = NULL;
+  this->so_gc.cas.dw = 0;
   this->so_gc.cas_d.dw = 0;
   double_head_mpscq_init(&this->so_gc.in_out_q);
   duration_list_init(&this->so_gc.duration_list);

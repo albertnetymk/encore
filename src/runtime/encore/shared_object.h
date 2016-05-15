@@ -55,7 +55,7 @@ typedef struct {
 typedef struct so_gc_t {
   uint32_t start_index;
   aba_entry_t aba_entry;
-  duration_t *current_d;
+  dwcas_t cas;
   double_head_mpscq_t in_out_q;
   dwcas_t cas_d;
   duration_list_t duration_list;
