@@ -25,10 +25,10 @@ typedef struct double_head_mpscq_t
 
 typedef struct duration_t duration_t;
 
-typedef struct duration_list_t {
+typedef struct duration_spscq_t {
   duration_t *head;
   duration_t *tail;
-} duration_list_t;
+} duration_spscq_t;
 
 __pony_spec_align__(
   typedef struct dwcas_t {
@@ -58,7 +58,7 @@ typedef struct so_gc_t {
   dwcas_t cas;
   double_head_mpscq_t in_out_q;
   dwcas_t cas_d;
-  duration_list_t duration_list;
+  duration_spscq_t duration_q;
 } so_gc_t;
 
 typedef struct encore_so_t

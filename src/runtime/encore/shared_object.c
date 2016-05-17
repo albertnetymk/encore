@@ -202,45 +202,43 @@ static void *double_head_mpscq_peek(double_head_mpscq_t *q)
   return next->data;
 }
 
-static void duration_list_init(duration_list_t *list)
+static void duration_spscq_init(duration_spscq_t *q)
 {
-  list->head = list->tail = NULL;
+  duration_t *dummy = POOL_ALLOC(duration_t);
+  dummy->next = NULL;
+  q->head = q->tail = dummy;
 }
 
-static void duration_list_push(duration_list_t *list, duration_t *d)
+static void duration_spscq_destroy(duration_spscq_t *q)
 {
-  if (_atomic_load(&list->head)) {
-    _atomic_store(&list->head->next, d);
-    _atomic_store(&list->head, d);
-  } else {
-    assert(!_atomic_load(&list->tail));
-    _atomic_store(&list->head, d);
-    _atomic_store(&list->tail, d);
-  }
+  assert(_atomic_load(&q->head) == _atomic_load(&q->tail));
+  POOL_FREE(duration_t, q->tail);
 }
 
-static duration_t* duration_list_pop(duration_list_t *list)
+static void duration_spscq_push(duration_spscq_t *q, duration_t *d)
 {
-  if (!_atomic_load(&list->tail)) {
-    assert(_atomic_load(&list->head) == NULL);
+  duration_t *prev = q->head;
+  q->head = d;
+  prev->next = d;
+}
+
+static duration_t* duration_spscq_pop(duration_spscq_t *q)
+{
+  duration_t *tail = q->tail;
+  duration_t *next = _atomic_load(&tail->next);
+
+  if (next == NULL) {
     return NULL;
   }
-  duration_t *ret = list->tail;
-  _atomic_store(&list->tail, _atomic_load(&list->tail->next));
-  if (!list->tail) {
-    _atomic_store(&list->head, NULL);
-  }
-  return ret;
+
+  POOL_FREE(duration_t, tail);
+  q->tail = next;
+  return next;
 }
 
-static duration_t* duration_list_peek(duration_list_t *list)
+static duration_t* duration_spscq_peek(duration_spscq_t *q)
 {
-  duration_t *tail = _atomic_load(&list->tail);
-  if (!tail) {
-    assert(_atomic_load(&list->head) == NULL);
-    return NULL;
-  }
-  return tail;
+  return _atomic_load(&q->tail->next);
 }
 
 // caller needs to ensure no gc is happening while traversing through node list
@@ -283,13 +281,13 @@ static void collect(encore_so_t *this)
   // single thread entry
   dwcas_t cmp, xchg;
   so_gc_t *so_gc = &this->so_gc;
-  duration_t *d = duration_list_pop(&so_gc->duration_list);
+  duration_t *d = duration_spscq_pop(&so_gc->duration_q);
   do {
     assert(d->collectible);
     for (size_t i = 0; i < d->closed_and_exit.exit; ++i) {
       clean_one(double_head_mpscq_pop(&so_gc->in_out_q));
     }
-    POOL_FREE(duration_t, d);
+    // TODO designate syntax
     cmp.aba = _atomic_load(&so_gc->cas_d.aba);
     cmp.current = d;
     xchg.aba = cmp.aba + 1;
@@ -297,7 +295,7 @@ static void collect(encore_so_t *this)
     bool _ret = _atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw);
     assert(_ret);
     // _atomic_store(&so_gc->cas_d.dw, xchg.dw);
-    d = duration_list_peek(&so_gc->duration_list);
+    d = duration_spscq_peek(&so_gc->duration_q);
     if (d == NULL || !_atomic_load(&d->collectible)) {
       return;
     }
@@ -309,7 +307,7 @@ static void collect(encore_so_t *this)
     if (!_atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw)) {
       return;
     }
-    d = duration_list_pop(&so_gc->duration_list);
+    d = duration_spscq_pop(&so_gc->duration_q);
   } while (true);
 }
 
@@ -502,7 +500,7 @@ static void exit_as_head(encore_so_t *this, duration_t *current_d,
   _atomic_store(&current_d->entry,
       _atomic_exchange(&so_gc->aba_entry.entry, 0));
   _atomic_store(&current_d->closed_and_exit.closed, true);
-  duration_list_push(&so_gc->duration_list, current_d);
+  duration_spscq_push(&so_gc->duration_q, current_d);
   set_new_current_duration(so_gc, current_d);
   if (item->duration == current_d) {
     _atomic_add(&current_d->closed_and_exit.exit, 1);
@@ -583,7 +581,7 @@ encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
   this->so_gc.cas.dw = 0;
   this->so_gc.cas_d.dw = 0;
   double_head_mpscq_init(&this->so_gc.in_out_q);
-  duration_list_init(&this->so_gc.duration_list);
+  duration_spscq_init(&this->so_gc.duration_q);
   return this;
 }
 
@@ -610,8 +608,9 @@ void encore_so_finalinzer(void *p)
   assert(p);
   encore_so_t *this = p;
   assert(double_head_mpscq_pop(&this->so_gc.in_out_q) == NULL);
-  assert(duration_list_pop(&this->so_gc.duration_list) == NULL);
+  assert(duration_spscq_pop(&this->so_gc.duration_q) == NULL);
   double_head_mpscq_destroy(&this->so_gc.in_out_q);
+  duration_spscq_destroy(&this->so_gc.duration_q);
 }
 
 void so_lockfree_send(pony_ctx_t *ctx)
