@@ -366,7 +366,7 @@ static queue_node_t *next_node(double_head_mpscq_t *q, queue_node_t *node)
   queue_node_t *next = NULL;
   do {
     next = _atomic_load(&node->next);
-    if (next && next != _atomic_load(&q->tail)) {
+    if (next) {
       return next;
     }
     relax();
