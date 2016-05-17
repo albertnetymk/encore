@@ -145,6 +145,7 @@ static void double_head_mpscq_destroy(double_head_mpscq_t* q)
 
 static void* double_mpscq_init_push(double_head_mpscq_t *q, void *data)
 {
+  assert(data);
   queue_node_t* node = POOL_ALLOC(queue_node_t);
   node->data = data;
   node->next = NULL;
@@ -160,6 +161,8 @@ static void* double_mpscq_init_push(double_head_mpscq_t *q, void *data)
     } else {
       if (cmp.node_of_head) {
         POOL_FREE(queue_node_t, node);
+        // TODO deref node_of_head is potentially dangerous, for it could be
+        // collected, but since we uses mmap, should be fine for now
         return cmp.node_of_head->data;
       }
     }
@@ -452,7 +455,6 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
     }
     if (cmp.current == NULL) {
       head_item = double_mpscq_init_push(&so_gc->in_out_q, item);
-      assert(head_item);
       xchg.aba = cmp.aba + 1;
       xchg.current = duration_new(head_item);
       // using dw to avoid using obsolete head_item
