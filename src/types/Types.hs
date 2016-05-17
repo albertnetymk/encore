@@ -30,6 +30,7 @@ module Types(
             ,conjunctiveType
             ,disjunctiveType
             ,isCapabilityType
+            ,isCompositeType
             ,incapability
             ,isIncapability
             ,typeVar
@@ -91,8 +92,10 @@ module Types(
             ,makeUnsafe
             ,makeLinear
             ,makeRead
+            ,makeSubordinate
             ,isLinearRefType
             ,isReadRefType
+            ,isSubordinateRefType
             ,makeStackbound
             ,isStackboundType
             ) where
@@ -120,12 +123,14 @@ instance Show TypeOp where
 data Mode = Linear
           | Unsafe
           | Read
+          | Subordinate
             deriving(Eq)
 
 instance Show Mode where
     show Linear = "linear"
     show Unsafe = "unsafe"
     show Read   = "read"
+    show Subordinate = "subord"
 
 modeSubtypeOf ty1 ty2
     | isPrimitive ty1 = True
@@ -366,7 +371,7 @@ typeComponents ty
     |  isRefType ty
     || isTypeSynonym ty =
         ty : refInfoTypeComponents (refInfo iType)
-    | isComposite ty =
+    | isCompositeType ty =
         ty : typeComponents (ltype iType) ++ typeComponents (rtype iType)
     | otherwise = [ty]
     where
@@ -378,7 +383,7 @@ typeMap :: (Type -> Type) -> Type -> Type
 typeMap f ty
     | isRefType ty =
         f ty{inner = refTypeMap f iType}
-    | isComposite ty =
+    | isCompositeType ty =
         f ty{inner = iType{ltype = typeMap f (ltype iType)
                           ,rtype = typeMap f (rtype iType)}}
     | isArrowType ty =
@@ -412,7 +417,7 @@ typeMapM f ty
     | isRefType ty = do
         iType' <- refTypeMapM f iType
         f ty{inner = iType'}
-    | isComposite ty = do
+    | isCompositeType ty = do
         ltype' <- typeMapM f (ltype iType)
         rtype' <- typeMapM f (rtype iType)
         let iType' = iType{ltype = ltype', rtype = rtype'}
@@ -572,14 +577,17 @@ setMode ty m
     , info <- refInfo iType
       = ty{inner = iType{refInfo = info{mode = Just m}}}
     | otherwise = error $ "Types.hs: Cannot set mode of " ++ showWithKind ty
+
 makeUnsafe ty = setMode ty Unsafe
 
 makeLinear ty = setMode ty Linear
 
 makeRead ty = setMode ty Read
 
+makeSubordinate ty = setMode ty Subordinate
+
 isSafeType ty
-    | isComposite ty
+    | isCompositeType ty
     , traits <- typesFromCapability ty = all isSafeType traits
     | isModeless ty =  isPrimitive ty || isActiveClassType ty
                     || isMaybeType ty && isSafeType (getResultType ty)
@@ -598,6 +606,10 @@ isReadRefType ty
     | Just Read <- getMode ty = True
     | otherwise = False
 
+isSubordinateRefType ty
+    | Just Subordinate <- getMode ty = True
+    | otherwise = False
+
 isCapabilityType Type{inner = CapabilityType{}} = True
 isCapabilityType Type{inner = TraitType{}} = True
 isCapabilityType Type{inner = EmptyCapability{}} = True
@@ -609,7 +621,7 @@ isDisjunction _ = False
 isConjunction Type{inner = CapabilityType{typeop = Product}} = True
 isConjunction _ = False
 
-isComposite ty = isDisjunction ty || isConjunction ty
+isCompositeType ty = isDisjunction ty || isConjunction ty
 
 incapability :: Type
 incapability = typ EmptyCapability
