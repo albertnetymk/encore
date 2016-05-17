@@ -460,10 +460,8 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
         cmp.current = xchg.current;
       } else {
         POOL_FREE(duration_t, xchg.current);
-        if (!cmp.current) {
-          // read after set_new_current_duration
-          continue;
-        }
+        // all bets off; restarting
+        continue;
       }
     }
     assert(cmp.current);
