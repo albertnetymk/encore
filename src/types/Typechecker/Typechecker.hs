@@ -796,7 +796,7 @@ instance Checkable Expr where
     -- TODO
     -- -------------------------------
     --  E |- CAT(x.f, e1, e2) : bool
-    doTypecheck cat@(CAT {args, leftover})
+    doTypecheck cat@(CAT {args, names})
         | [target, witness, arg] <- args = do
            eTarget <- typecheck target
            checkTargetShape eTarget
@@ -804,6 +804,7 @@ instance Checkable Expr where
            eWitness <- typecheck witness
            targetType `assertSubtypeOf` AST.getType eWitness
            eArg <- typecheck arg
+           checkAssignmentRestrictions eTarget eArg
            let argType = AST.getType eArg
            if isPristineRefType argType
            then case witness of
@@ -815,8 +816,8 @@ instance Checkable Expr where
            if isRefType targetType
            then do
              bindings <- getBindings eTarget eWitness eArg
-             leftoverType <- argType `typeMinus` targetType
-             let extra = maybe [] (\x -> [(x, leftoverType)]) leftover
+             residualTypes <- mapM (residualType targetType) names
+             let extra = zip names residualTypes
              return $ setCondEnvChange (extra ++ bindings) $
                       setType boolType cat{args = [eTarget, eWitness, eArg]}
            else
@@ -860,6 +861,13 @@ instance Checkable Expr where
                       VarAccess{} = return [(name, AST.getType target)] -- TODO: Is this safe?
           getBindings _ _ _ = return []
 
+          residualType targetType f = do
+            let strongRestricts = stronglyBarredFields targetType
+            fdecl <- findField (targetType `unbar` f) f
+            unless (f `elem` strongRestricts) $
+                   tcError $ ResidualAliasingError f targetType
+            return $ ftype fdecl
+
     -- TODO
     -- -------------------------------
     --  E |- try(x.f = y) : bool
@@ -872,6 +880,7 @@ instance Checkable Expr where
            argType `assertSubtypeOf` targetType
            checkArgShape eArg
            let bindings = getBindings eTarget
+           checkAssignmentRestrictions eTarget eArg
            return $ setEnvChange bindings $
                     setType boolType try{target = eTarget, arg = eArg}
         where
@@ -1081,6 +1090,7 @@ instance Checkable Expr where
         if isPristineRefType targetType && isVarAccess target
         then do
           eRhs <- typecheck rhs
+          checkAssignmentRestrictions eLhs eRhs
           let lhsType = AST.getType eLhs
               rhsType = AST.getType eRhs
           isDowncast <- liftM (lhsType /= rhsType &&) $
@@ -1093,13 +1103,14 @@ instance Checkable Expr where
             return $ setEnvChange bindings $
                      setType voidType assign {lhs = eLhs, rhs = eRhs}
           else do
-            lhsType `assertSubtypeOf` rhsType
+            rhsType `assertSubtypeOf` lhsType
             return $ setType voidType assign {lhs = eLhs, rhs = eRhs}
         else do
           inConstr <- inConstructor
           unless (inConstr && isThisAccess target) $
                  assertAssignable eLhs
           eRhs <- hasType rhs (AST.getType eLhs)
+          checkAssignmentRestrictions eLhs eRhs
           return $ setType voidType assign {lhs = eLhs, rhs = eRhs}
         where
           inConstructor = do

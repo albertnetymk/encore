@@ -14,6 +14,7 @@ module Typechecker.Util(TypecheckM
                        ,resolveType
                        ,resolveTypeAndCheckForLoops
                        ,subtypeOf
+                       ,checkAssignmentRestrictions
                        ,assertDistinctThing
                        ,assertDistinct
                        ,findField
@@ -27,7 +28,6 @@ module Typechecker.Util(TypecheckM
                        ,isThreadType
                        ,isAliasableType
                        ,checkConjunction
-                       ,typeMinus
                        ) where
 
 import Identifiers
@@ -45,6 +45,7 @@ import Control.Monad.State
 -- Module dependencies
 import Typechecker.TypeError
 import Typechecker.Environment
+import AST.PrettyPrinter
 
 -- Monadic versions of common functions
 anyM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
@@ -98,7 +99,17 @@ matchTypeParameterLength ty1 ty2 = do
 -- reference types to traits or classes and making sure that any
 -- type variables are in the current environment.
 resolveType :: Type -> TypecheckM Type
-resolveType = typeMapM resolveSingleType
+resolveType = typeMapM (\ty -> do ty' <- resolveSingleType ty
+                                  checkBarring ty'
+                                  return ty')
+
+checkBarring :: Type -> TypecheckM ()
+checkBarring ty
+  | isClassType ty =
+      mapM_ (\f -> findField (ty `unbar` f) f) (barredFields ty)
+  | otherwise =
+      unless (null $ barredFields ty) $
+             tcError $ CannotHaveRestrictedFieldsError ty
 
 resolveSingleType :: Type -> TypecheckM Type
 resolveSingleType ty
@@ -171,7 +182,6 @@ resolveMode actual formal
   | isClassType actual = do
       unless (isModeless actual) $
         tcError $ CannotHaveModeError actual
-      mapM_ (findField formal) (barredFields actual)
       return actual
   | isTraitType actual = do
       when (isModeless actual) $
@@ -181,8 +191,6 @@ resolveMode actual formal
       when (isReadRefType actual) $
            unless (isReadRefType formal) $
                   tcError CannotGiveReadModeError
-      unless (null $ barredFields actual) $
-             tcError $ CannotHaveRestrictedFieldsError actual
       return actual
   | otherwise =
       error $ "Util.hs: Cannot resolve unknown reftype: " ++ show formal
@@ -237,6 +245,8 @@ subtypeOf ty1 ty2
           , params2 <- getTypeParameters ref2
           , barred1 <- barredFields ref1
           , barred2 <- barredFields ref2
+          , strong1 <- stronglyBarredFields ref1
+          , strong2 <- stronglyBarredFields ref2
           , length params1 == length params2 = do
               results <- zipWithM subtypeOf params1 params2
               return $ and results && null (barred1 \\ barred2) &&
@@ -268,6 +278,17 @@ subtypeOf ty1 ty2
       numericSubtypeOf ty1 ty2
           | isIntType ty1 && isRealType ty2 = True
           | otherwise = ty1 == ty2
+
+checkAssignmentRestrictions :: Expr -> Expr -> TypecheckM ()
+checkAssignmentRestrictions target arg =
+  let targetType = AST.getType target
+      argType = AST.getType arg
+      strongRestrictions = stronglyBarredFields targetType
+      argRestrictions = barredFields argType
+  in case find (`elem` argRestrictions) strongRestrictions of
+       Just f ->
+         tcError $ StrongRestrictionViolationError f target arg
+       Nothing -> return ()
 
 -- | Convenience function for asserting distinctness of a list of
 -- things. @assertDistinct "declaration" "field" [f : Foo, f :
@@ -480,13 +501,3 @@ checkConjunction source sinks
     singleConjunction ty1 ty2 (tys1, tys2) =
         ty1 `elem` tys1 && ty2 `elem` tys2 ||
         ty1 `elem` tys2 && ty2 `elem` tys1
-
-typeMinus ty1 ty2 = do
-    Just fields1 <- asks $ fields ty1
-    let fs1 = barredFields ty1
-        fs2 = barredFields ty2
-        barrableFields = map fname $ filter (not . isValField) fields1
-        fs = fs1 `union` (barrableFields \\ fs2)
-        (ty1', _) = mapAccumL (\t f -> (t `bar` f, undefined)) ty1 fs
-    return $ unbox ty1'
-    -- TODO: What if ty1 is not linear? What if it is borrowed ?!
