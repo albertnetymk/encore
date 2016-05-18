@@ -361,16 +361,12 @@ static inline void relax(void)
 #endif
 }
 
-static queue_node_t *next_node(double_head_mpscq_t *q, queue_node_t *node)
+static queue_node_t *next_node(queue_node_t *node)
 {
-  queue_node_t *next = NULL;
-  do {
-    next = _atomic_load(&node->next);
-    if (next) {
-      return next;
-    }
+  while (_atomic_load(&node->next) == NULL) {
     relax();
-  } while (true);
+  }
+  return node->next;
 }
 
 // currend_d is closing; set new duration by selecting the first non-exited
@@ -398,7 +394,7 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
     uint32_t i;
     assert(d_iter->entry >= 1);
     for (i = start_index+1; i < d_iter->entry; ++i) {
-      node = next_node(&so_gc->in_out_q, node);
+      node = next_node(node);
       item = node->data;
       assert(item);
       if (!_atomic_load(&item->exited)) {
@@ -424,7 +420,7 @@ static void set_new_current_duration(so_gc_t *so_gc, duration_t *current_d)
     d_iter = _atomic_load(&d_iter->next);
   } while (true);
 
-  assert(d ? true : node == NULL);
+  assert(d == NULL || node == NULL ? node || d == false : true);
   _atomic_store(&so_gc->in_out_q.double_head.node_of_head, node);
   _atomic_store(&so_gc->start_index, start_index);
   assert(_atomic_load(&so_gc->cas.current) == current_d);
@@ -459,6 +455,7 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
       xchg.current = duration_new(head_item);
       // using dw to avoid using obsolete head_item
       if (_atomic_dwcas(&so_gc->cas.dw, &cmp.dw, xchg.dw)) {
+        assert(head_item);
         cmp.current = xchg.current;
       } else {
         POOL_FREE(duration_t, xchg.current);
@@ -558,13 +555,10 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
     if (_atomic_cas(&item->head_candidate, &old_head_candidate, 2)) {
       exit_as_not_head(this, item);
     } else {
-      do {
-        if (_atomic_load(&so_gc->cas.current)->head == item &&
-            _atomic_load(&so_gc->aba_entry.aba) % 2 == 0) {
-          break;
-        }
+      // wait until set_new_current_duration ends
+      while (_atomic_load(&so_gc->aba_entry.aba) % 2 != 0) {
         relax();
-      } while (true);
+      }
       current_d = _atomic_load(&so_gc->cas.current);
       assert(current_d);
       assert(current_d->head == item);
