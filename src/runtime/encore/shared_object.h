@@ -3,26 +3,6 @@
 
 #include "encore.h"
 
-typedef struct queue_node_t queue_node_t;
-
-__pony_spec_align__(
-  typedef struct {
-    union {
-      struct {
-        queue_node_t* node_of_head;
-        queue_node_t* head;
-      };
-      dw_t dw;
-    };
-  } double_head_t, 16
-);
-
-typedef struct double_head_mpscq_t
-{
-  double_head_t double_head;
-  queue_node_t* tail;
-} double_head_mpscq_t;
-
 typedef struct duration_t duration_t;
 
 typedef struct duration_spscq_t {
@@ -53,10 +33,8 @@ typedef struct {
 } aba_entry_t;
 
 typedef struct so_gc_t {
-  uint32_t start_index;
   aba_entry_t aba_entry;
-  dwcas_t cas;
-  double_head_mpscq_t in_out_q;
+  duration_t *current_d;
   dwcas_t cas_d;
   duration_spscq_t duration_q;
 } so_gc_t;
