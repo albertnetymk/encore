@@ -281,6 +281,7 @@ data Error =
   | NonStableFieldAccessError FieldDecl
   | StrongRestrictionViolationError Name Expr Expr
   | ResidualAliasingError Name Type
+  | NonSpineCatTargetError Expr
   | SimpleError String
 
 arguments 1 = "argument"
@@ -571,6 +572,9 @@ instance Show Error where
         printf ("Cannot create residual alias. Field '%s' " ++
                 "is not strongly restricted in type '%s'")
                (show f) (show ty)
+    show (NonSpineCatTargetError target) =
+        printf "CAT target '%s' must have spine mode"
+               (show (ppSugared target))
     show (SimpleError msg) = msg
 
 data TCWarning = TCWarning Backtrace Warning

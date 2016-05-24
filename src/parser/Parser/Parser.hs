@@ -417,6 +417,8 @@ mode = (reserved "linear" >> return makeLinear)
        <|>
        (reserved "lockfree" >> return makeLockfree)
        <|>
+       (reserved "spine" >> return makeSpine)
+       <|>
        (reserved "subord" >> return makeSubordinate)
        <?> "mode"
 
