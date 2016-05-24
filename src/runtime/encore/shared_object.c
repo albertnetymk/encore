@@ -116,34 +116,32 @@ static void clean_one(to_trace_t *item)
 
 static void collect(encore_so_t *this)
 {
-  // single thread entry
-  dwcas_t cmp, xchg;
+  // multithread
   so_gc_t *so_gc = &this->so_gc;
-  duration_t *d = duration_spscq_pop(&so_gc->duration_q);
-  to_trace_t *item;
+  uint32_t pending = 0;
+  if (!_atomic_cas(&so_gc->pending_lock.pending, &pending, 1)) {
+    return;
+  }
+  uint32_t lock = 0;
+  if (!_atomic_cas(&so_gc->pending_lock.lock, &lock, 1)) {
+    return;
+  }
+  duration_t *d;
+  pending_lock_t pending_lock = (pending_lock_t) {.lock = 1};
+  pending_lock_t new_pending_lock = (pending_lock_t) {};
   do {
-    assert(d);
-    assert(d->collectible);
-    item = d->head;
-    assert(item);
-    clean_one(item);
-    cmp = (dwcas_t) {.aba = _atomic_load(&so_gc->cas_d.aba), .current = d};
-    xchg = (dwcas_t) { .aba = cmp.aba + 1, .current = NULL };
-    bool _ret = _atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw);
-    assert(_ret);
-    (void) _ret;
-    // _atomic_store(&so_gc->cas_d.dw, xchg.dw);
-    cmp = (dwcas_t) {.aba = _atomic_load(&so_gc->cas_d.aba), .current = NULL};
+    _atomic_store(&so_gc->pending_lock.pending, 0);
     d = duration_spscq_peek(&so_gc->duration_q);
-    if (d == NULL || !_atomic_load(&d->collectible)) {
-      return;
+    if (d && _atomic_load(&d->collectible)) {
+      clean_one(d->head);
+      duration_t *_d = duration_spscq_pop(&so_gc->duration_q);
+      assert(d == _d);
     }
-    xchg = (dwcas_t) { .aba = cmp.aba + 1, .current = d };
-    // racing with set_collectible
-    if (!_atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw)) {
-      return;
+    pending_lock.pending = 0;
+    if (_atomic_cas(&so_gc->pending_lock.dw, &pending_lock.dw,
+          new_pending_lock.dw)) {
+        break;
     }
-    d = duration_spscq_pop(&so_gc->duration_q);
   } while (true);
 }
 
@@ -156,16 +154,7 @@ static void set_collectible(encore_so_t *this, duration_t *d)
 
   if (_atomic_load(&d->exit) == _atomic_load(&d->entry)) {
     _atomic_store(&d->collectible, true);
-    so_gc_t *so_gc = &this->so_gc;
-    dwcas_t cmp, xchg;
-    cmp = (dwcas_t) {.aba = _atomic_load(&so_gc->cas_d.aba), .current = NULL};
-    duration_t *first = duration_spscq_peek(&so_gc->duration_q) ;
-    if (first && _atomic_load(&first->collectible)) {
-      xchg = (dwcas_t) { .aba = cmp.aba + 1, .current = first };
-      if (_atomic_dwcas(&so_gc->cas_d.dw, &cmp.dw, xchg.dw)) {
         collect(this);
-      }
-    }
   }
 }
 
@@ -252,7 +241,7 @@ encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
   encore_so_t *this = (encore_so_t*) encore_create(ctx, type);
   this->so_gc.aba_entry.dw = 0;
   this->so_gc.current_d = new_headless_duration();
-  this->so_gc.cas_d.dw = 0;
+  this->so_gc.pending_lock.dw = 0;
   duration_spscq_init(&this->so_gc.duration_q);
   return this;
 }

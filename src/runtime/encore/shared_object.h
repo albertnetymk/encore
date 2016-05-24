@@ -32,11 +32,21 @@ typedef struct {
   };
 } aba_entry_t;
 
+typedef struct {
+  union {
+    struct {
+      uint32_t pending;
+      uint32_t lock;
+    };
+    uint64_t dw;
+  };
+} pending_lock_t;
+
 typedef struct so_gc_t {
   aba_entry_t aba_entry;
   duration_t *current_d;
-  dwcas_t cas_d;
   duration_spscq_t duration_q;
+  pending_lock_t pending_lock;
 } so_gc_t;
 
 typedef struct encore_so_t
