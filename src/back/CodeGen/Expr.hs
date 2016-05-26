@@ -116,14 +116,28 @@ newParty (A.PartyPar {}) = partyNewParP
 newParty _ = error $ "ERROR in 'Expr.hs': node is different from 'Liftv', " ++
                      "'Liftf' or 'PartyPar'"
 
-translateDecl (name, expr) = do
+translateDecl (vars, expr) = do
   (ne, te) <- translate expr
-  tmp <- Ctx.genNamedSym (show name)
-  substituteVar name (Var tmp)
-  return (Var tmp,
-          [Comm $ show name ++ " = " ++ show (PP.ppSugared expr)
+  let exprType = A.getType expr
+  tmp <- Var <$> Ctx.genSym
+  theAssigns <- mapM (assignDecl ne exprType) vars
+  return (tmp,
+          [Comm $ intercalate ", " (map (show . A.varName) vars) ++
+                  " = " ++ show (PP.ppSugared expr)
           ,te
-          ,Assign (Decl (translate (A.getType expr), Var tmp)) ne])
+          ] ++ theAssigns)
+  where
+    assignDecl rhs rhsType var = do
+      let x = A.varName var
+      tmp <- Var <$> Ctx.genNamedSym (show x)
+      substituteVar x tmp
+      let (lhsType, theRhs) =
+            case var of
+              A.VarDecl{A.varType} ->
+                (translate varType, Cast (translate varType) rhs)
+              A.Var{} ->
+                (translate rhsType, AsExpr rhs)
+      return $ Assign (Decl (lhsType, tmp)) theRhs
 
 instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
   -- | Translate an expression into the corresponding C code
@@ -460,7 +474,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
     tmpsTdecls <- mapM translateDecl decls
     let (tmps, tdecls) = unzip tmpsTdecls
     (nbody, tbody) <- translate body
-    mapM_ (unsubstituteVar . fst) decls
+    mapM_ (mapM_ (unsubstituteVar . A.varName) . fst) decls
     return (nbody, Seq $ concat tdecls ++ [tbody])
 
   translate (A.NewWithInit {A.ty, A.args})

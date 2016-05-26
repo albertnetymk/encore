@@ -390,6 +390,12 @@ type Arguments = [Expr]
 data MaybeContainer = JustData { e :: Expr}
                     | NothingData deriving(Eq, Show)
 
+data VarDecl =
+    Var {varName :: Name}
+  | VarDecl {varName :: Name,
+             varType :: Type}
+  deriving(Eq, Show)
+
 data Expr = Skip {emeta :: Meta Expr}
           | TypedExpr {emeta :: Meta Expr,
                        body :: Expr,
@@ -437,10 +443,10 @@ data Expr = Skip {emeta :: Meta Expr}
           | FinishAsync {emeta :: Meta Expr,
                          body :: Expr}
           | Let {emeta :: Meta Expr,
-                 decls :: [(Name, Expr)],
+                 decls :: [([VarDecl], Expr)],
                  body :: Expr}
           | MiniLet {emeta :: Meta Expr,
-                     decl :: (Name, Expr)}
+                     decl :: ([VarDecl], Expr)}
           | Seq {emeta :: Meta Expr,
                  eseq :: [Expr]}
           | IfThenElse {emeta :: Meta Expr,

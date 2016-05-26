@@ -20,9 +20,11 @@ module Typechecker.Util(TypecheckM
                        ,findMethodWithCalledType
                        ,findCapability
                        ,propagateResultType
+                       ,isLinearType
                        ,isSubordinateType
                        ,isEncapsulatedType
                        ,isThreadType
+                       ,checkConjunction
                        ) where
 
 import Identifiers
@@ -331,6 +333,35 @@ propagateResultType ty e
       propagateMatchClause mc@MatchClause{mchandler} =
           mc{mchandler = propagateResultType ty mchandler}
 
+isLinearType :: (MonadReader Environment m) => Type -> m Bool
+isLinearType = isLinearType' []
+    where
+      isLinearType' :: (MonadReader Environment m) => [Type] -> Type -> m Bool
+      isLinearType' checked ty = do
+        let components = typeComponents (dropArrows ty)
+            unchecked = components \\ checked
+            classes = filter isClassType unchecked
+        capabilities <- mapM findCapability classes
+        liftM2 (||)
+              (anyM isDirectlyLinear unchecked)
+              (anyM (isLinearType' (checked ++ unchecked)) capabilities)
+
+      isDirectlyLinear :: (MonadReader Environment m) => Type -> m Bool
+      isDirectlyLinear ty
+          | isClassType ty = do
+              cap <- findCapability ty
+              let components = typeComponents (dropArrows ty) ++
+                               typeComponents (dropArrows cap)
+              return $ any isLinearRefType components
+          | otherwise = do
+              let components = typeComponents (dropArrows ty)
+              return $ any isLinearRefType components
+
+      dropArrows = typeMap dropArrow
+      dropArrow ty
+          | isArrowType ty = voidType
+          | otherwise = ty
+
 isSubordinateType :: Type -> TypecheckM Bool
 isSubordinateType ty
     | isCompositeType ty
@@ -372,3 +403,27 @@ isThreadType ty
     | isTupleType ty =
         anyM isThreadType (getArgTypes ty)
     | otherwise = return $ isThreadRefType ty
+
+checkConjunction :: Type -> [Type] -> TypecheckM ()
+checkConjunction source sinks
+  | isCompositeType source = do
+      let sourceConjunctions = conjunctiveTypesFromCapability source
+      mapM_ (\ty -> wellFormedConjunction sourceConjunctions
+                                          (sinks \\ [ty]) ty) sinks
+  | isPassiveClassType source = do
+      cap <- findCapability source
+      checkConjunction cap sinks
+  | otherwise =
+      return ()
+  where
+    wellFormedConjunction pairs siblings ty = do
+      when (null pairs) $
+        tcError $ MalformedConjunctionError ty (head siblings) source
+      let nonDisjoints =
+            filter (\ty' -> any (not . singleConjunction ty ty') pairs) siblings
+          nonDisjoint = head nonDisjoints
+      unless (null nonDisjoints) $
+        tcError $ MalformedConjunctionError ty nonDisjoint source
+    singleConjunction ty1 ty2 (tys1, tys2) =
+        ty1 `elem` tys1 && ty2 `elem` tys2 ||
+        ty1 `elem` tys2 && ty2 `elem` tys1

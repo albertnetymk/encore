@@ -216,6 +216,7 @@ data Error =
   | ThreadFieldError
   | ThreadReturnError Name
   | ThreadArgumentError Expr
+  | MalformedConjunctionError Type Type Type
 
 arguments 1 = "argument"
 arguments _ = "arguments"
@@ -431,6 +432,9 @@ instance Show Error where
         printf ("Method '%s' returns a thread local capability and cannot " ++
                 "be called by a different active object")
                (show name)
+    show (MalformedConjunctionError ty nonDisjoint source) =
+        printf "Type '%s' does not form a conjunction with '%s' in %s"
+               (show ty) (show nonDisjoint) (Types.showWithKind source)
     show (SimpleError msg) = msg
 
 
