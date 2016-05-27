@@ -97,6 +97,7 @@ module Types(
             ,isThreadRefType
             ,isReadRefType
             ,isSubordinateRefType
+            ,isUnsafeRefType
             ,makeStackbound
             ,isStackboundType
             ) where
@@ -617,6 +618,10 @@ isReadRefType ty
 
 isSubordinateRefType ty
     | Just Subordinate <- getMode ty = True
+    | otherwise = False
+
+isUnsafeRefType ty
+    | Just Unsafe <- getMode ty = True
     | otherwise = False
 
 isCapabilityType Type{inner = CapabilityType{}} = True

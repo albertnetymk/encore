@@ -202,7 +202,6 @@ data Error =
   | TypeWithCapabilityMismatchError Type Type Type
   | TypeVariableAmbiguityError Type Type Type
   | FreeTypeVariableError Type
-  | SimpleError String
   | CannotHaveModeError Type
   | ModelessError Type
   | ModeOverrideError Type
@@ -217,6 +216,9 @@ data Error =
   | ThreadReturnError Name
   | ThreadArgumentError Expr
   | MalformedConjunctionError Type Type Type
+  | CannotUnpackError Type
+  | CannotInferUnpackingError Type
+  | SimpleError String
 
 arguments 1 = "argument"
 arguments _ = "arguments"
@@ -433,6 +435,13 @@ instance Show Error where
     show (MalformedConjunctionError ty nonDisjoint source) =
         printf "Type '%s' does not form a conjunction with '%s' in %s"
                (show ty) (show nonDisjoint) (Types.showWithKind source)
+    show (CannotUnpackError source) =
+        printf "Cannot unpack empty capability of class '%s'"
+               (show source)
+    show (CannotInferUnpackingError cap) =
+        printf ("Unpacking of %s cannot be inferred. " ++
+                "Try adding type annotations")
+               (Types.showWithKind cap)
     show (SimpleError msg) = msg
 
 
