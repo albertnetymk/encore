@@ -255,9 +255,9 @@ bool ponyint_actor_run(pony_ctx_t** ctx, pony_actor_t* actor, size_t batch)
   if(!has_flag(actor, FLAG_BLOCKED | FLAG_SYSTEM) ||
     has_flag(actor, FLAG_RC_CHANGED))
   {
-    set_flag(actor, FLAG_BLOCKED);
-    unset_flag(actor, FLAG_RC_CHANGED);
-    ponyint_cycle_block(*ctx, actor, &actor->gc);
+    // set_flag(actor, FLAG_BLOCKED);
+    // unset_flag(actor, FLAG_RC_CHANGED);
+    // ponyint_cycle_block(*ctx, actor, &actor->gc);
   }
 
   // Return true (i.e. reschedule immediately) if our queue isn't empty.
