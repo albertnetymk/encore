@@ -4,7 +4,9 @@ module CodeGen.ClassTable (
   lookupMethods,
   lookupField,
   lookupCalledType,
-  buildClassTable) where
+  buildClassTable,
+  lookup_implemented_capa,
+  ) where
 
 import Types
 import AST.AST
@@ -12,14 +14,20 @@ import Identifiers
 
 import Data.List
 import Data.Maybe
+import qualified Data.Map.Strict as M
 import Control.Arrow
 
 type FieldTable  = [(Name, FieldDecl)]
 type MethodTable = [(Name, FunctionHeader)]
-type ClassTable  = [(Type, (FieldTable, MethodTable))]
+
+data ClassTable = ClassTable {
+  program :: Program,
+  table :: [(Type, (FieldTable, MethodTable))]
+}
 
 buildClassTable :: Program -> ClassTable
-buildClassTable = traverseProgram getEntries
+buildClassTable p =
+  ClassTable{program = p, table = traverseProgram getEntries p}
   where
     getEntries p = map getClassEntry (classes p) ++
                    map getTraitEntry (traits p)
@@ -41,7 +49,7 @@ lookupEntry :: Type -> ClassTable -> (FieldTable, MethodTable)
 lookupEntry ty ctable =
     let fail = error $ "ClassTable.hs: No entry for " ++ Types.showWithKind ty
     in snd $
-       fromMaybe fail $ find ((== getId ty) . getId . fst) ctable
+       fromMaybe fail $ find ((== getId ty) . getId . fst) $ table ctable
 
 lookupField :: Type -> Name -> ClassTable -> FieldDecl
 lookupField ty f ctable =
@@ -61,6 +69,10 @@ lookupMethods :: Type -> ClassTable -> [FunctionHeader]
 lookupMethods cls ctable =
     let (_, ms) = lookupEntry cls ctable
     in map snd ms
+
+lookup_implemented_capa :: Type -> ClassTable -> Type
+lookup_implemented_capa t ClassTable{program} =
+  ccapability $ getClass t program
 
 lookupCalledType :: Type -> Name -> ClassTable -> Type
 lookupCalledType ty m ctable

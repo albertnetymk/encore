@@ -128,7 +128,6 @@ instance HasMeta Typedef where
     setType ty i =
         error "AST.hs: Cannot set the type of an Typedef"
 
-
 data HeaderKind = Streaming
                 | NonStreaming
                   deriving(Eq, Show)
@@ -148,7 +147,6 @@ data FunctionHeader =
         hpatterns   :: [Expr],
         hguard      :: Expr
     }deriving(Eq, Show)
-
 
 setHeaderType ty h = h{htype = ty}
 
@@ -688,6 +686,14 @@ getTrait t p =
     match t trait = getId t == getId (tname trait)
   in
     fromJust $ find (match t) traits
+
+getClass :: Type -> Program -> ClassDecl
+getClass t p =
+  let
+    classes = allClasses p
+    match l r = getId l == getId (cname r)
+  in
+    fromJust $ find (match t) classes
 
 allTypedefs = traverseProgram typedefs
 

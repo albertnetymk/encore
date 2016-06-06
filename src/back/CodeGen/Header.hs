@@ -187,15 +187,27 @@ generateHeader p =
                        Typedef (Struct $ classTypeName cname) (classTypeName cname)
 
      passiveTypes = map passiveType $ filter (A.isPassive) allclasses
-                 where
-                   passiveType A.Class{A.cname, A.cfields} =
-                       let typeParams = Ty.getTypeParameters cname in
-                       StructDecl (AsType $ classTypeName cname)
-                                  ((Ptr ponyTypeT, AsLval $ selfTypeField) :
-                                   map (\ty -> (Ptr ponyTypeT, AsLval $ typeVarRefName ty)) typeParams ++
-                                   zip
-                                   (map (translate . A.ftype) cfields)
-                                   (map (AsLval . fieldName . A.fname) cfields))
+       where
+         passiveType c@A.Class{A.cname, A.cfields} =
+           let typeParams = Ty.getTypeParameters cname in
+           StructDecl (AsType $ classTypeName cname)
+                      (
+                       (Ptr ponyTypeT, AsLval $ selfTypeField) :
+                       lf_so_rc c ++
+                       map (\ty -> (Ptr ponyTypeT, AsLval $ typeVarRefName ty))
+                         typeParams ++
+                       zip
+                         (map (translate . A.ftype) cfields)
+                         (map (AsLval . fieldName . A.fname) cfields)
+                      )
+         lf_so_rc c
+           | any Ty.isSpineRefType $ Ty.typesFromCapability $ A.ccapability c
+             = [
+               (Typ "size_t", Var "_enc__lf_so_rc"),
+               (Typ "bool", Var "_enc__lf_so_published")
+               ]
+           | otherwise = []
+
      traitMethodEnums =
        let
          dicts = map (A.getType &&& A.traitInterface) allTraits

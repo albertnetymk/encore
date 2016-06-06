@@ -363,37 +363,46 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
                         else
                             return $ upCast nrhs
                  _ -> return $ upCast nrhs
-    prep <- case expr of
-              A.Assign{A.lhs = lhs@A.FieldAccess{A.name, A.target},
-                       A.rhs = rhs@A.Consume{}} -> do
-                fld <- gets $ Ctx.lookupField (A.getType target) name
-                if A.isOnceField fld || A.isSpecField fld then
-                  return $
-                    Statement $ Call (Nam "_ASSIGN_CONSUME_WRAPPER")
-                      [nrhs, AsLval $ classTraceFnName (A.getType rhs)]
-                else
-                  return skip_prep
-              _ -> return skip_prep
     lval <- mkLval lhs
+    prep <-
+      case expr of
+        A.Assign{A.lhs = lhs@A.FieldAccess{A.name, A.target}, A.rhs} -> do
+          fld <- gets $ Ctx.lookupField (A.getType target) name
+          if A.isOnceField fld || A.isSpecField fld then
+            return $
+              Statement $ Call (Nam "_SO_LOCKFREE_ASSIGN_SPEC_WRAPPER")
+                [lval, nrhs, AsLval $ classTraceFnName (A.getType rhs)]
+          else do
+            traits <- gets $
+              liftM Ty.typesFromCapability . Ctx.lookup_implemented_capa $
+                A.getType lhs
+            if Ty.isClassType (A.getType lhs) &&
+               any Ty.isSpineRefType traits then
+              return $
+                Statement $ Call (Nam "_SO_LOCKFREE_ASSIGN_SUBORD_WRAPPER")
+                  [lval, nrhs]
+            else
+              return skip_prep
+        _ -> return skip_prep
     return (unit, Seq [trhs, prep, Assign lval castRhs])
-      where
-        skip_prep =
-            Seq ([Comm "no prep for non spec or once"] :: [CCode Stat])
-        upCast e = if needUpCast then cast e else AsExpr e
-          where
-            lhsType = A.getType lhs
-            rhsType = A.getType rhs
-            needUpCast = rhsType /= lhsType
-            cast = Cast (translate lhsType)
-        mkLval (A.VarAccess {A.name}) =
-           do ctx <- get
-              case Ctx.substLkp ctx name of
-                Just substName -> return substName
-                Nothing -> return $ Var (show name)
-        mkLval (A.FieldAccess {A.target, A.name}) =
-           do (ntarg, ttarg) <- translate target
-              return (Deref (StatAsExpr ntarg ttarg) `Dot` (fieldName name))
-        mkLval e = error $ "Cannot translate '" ++ (show e) ++ "' to a valid lval"
+    where
+      skip_prep =
+          Seq ([Comm "only prep for spec, once and spine"] :: [CCode Stat])
+      upCast e = if needUpCast then cast e else AsExpr e
+        where
+          lhsType = A.getType lhs
+          rhsType = A.getType rhs
+          needUpCast = rhsType /= lhsType
+          cast = Cast (translate lhsType)
+      mkLval (A.VarAccess {A.name}) =
+         do ctx <- get
+            case Ctx.substLkp ctx name of
+              Just substName -> return substName
+              Nothing -> return $ Var (show name)
+      mkLval (A.FieldAccess {A.target, A.name}) =
+         do (ntarg, ttarg) <- translate target
+            return (Deref (StatAsExpr ntarg ttarg) `Dot` (fieldName name))
+      mkLval e = error $ "Cannot translate '" ++ (show e) ++ "' to a valid lval"
 
   translate maybe@(A.MaybeValue _ (A.JustData e)) = do
     (nE, tE) <- translate e
@@ -1061,14 +1070,12 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
       theCAS theArgs two =
         case cat of
           A.CAT{A.args = [_,A.FieldAccess{},A.VarAccess{}]} ->
-            Call (Nam "_CAS_LINK_WRAPPER") $
+            Call (Nam "_SO_LOCKFREE_CAS_LINK_WRAPPER") $
               theArgs ++ [AsExpr $ AsLval $ classTraceFnName $ snd two]
           A.CAT{A.args = [_,A.VarAccess{},A.FieldAccess{}]} ->
-            Call (Nam "_CAS_UNLINK_WRAPPER") $
+            Call (Nam "_SO_LOCKFREE_CAS_UNLINK_WRAPPER") $
               theArgs ++
-              [AsExpr $ AsLval $ classTraceFnName $ fst two] ++
-              [AsExpr $ AsLval $
-                class_inverse_field_trace_fn_name (A.getType target) name]
+              [AsExpr $ AsLval $ classTraceFnName $ fst two]
           _ -> error "swap not supported"
 
   translate cat@(A.TryAssign{A.target = acc@A.FieldAccess{A.target, A.name},

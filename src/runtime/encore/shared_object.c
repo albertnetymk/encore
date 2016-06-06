@@ -8,6 +8,25 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#define _atomic_sub(PTR, VAL) \
+  (__atomic_fetch_sub(PTR, VAL, __ATOMIC_RELEASE))
+
+// #define _CAS_TRY_WRAPPER(X, Y, Z, F)             \
+//   ({                                             \
+//     bool ret;                                    \
+//     pony_gc_try_send(_ctx);                      \
+//     so_lockfree_set_trace_boundary(_ctx, NULL);  \
+//     pony_traceobject(_ctx, (UNFREEZE(Z)), F);    \
+//     pony_gc_try_send_done(_ctx);                 \
+//     ret = __sync_bool_compare_and_swap(X, Y, Z); \
+//     if (ret) {                                   \
+//       so_lockfree_send(_ctx);                    \
+//     } else {                                     \
+//       so_lockfree_unsend(_ctx);                  \
+//     }                                            \
+//     ret;                                         \
+//   })                                             \
+
 static inline void gc_sendobject_shallow(pony_ctx_t *ctx, void *p)
 {
   gc_sendobject(ctx, p, NULL);
@@ -36,9 +55,6 @@ typedef struct duration_t {
   bool closed;
   struct duration_t *next;
 } duration_t;
-
-#define _atomic_sub(PTR, VAL) \
-  (__atomic_fetch_sub(PTR, VAL, __ATOMIC_RELEASE))
 
 typedef struct trace_address_list {
   void *address;
@@ -96,6 +112,7 @@ static duration_t* duration_spscq_peek(duration_spscq_t *q)
 static void clean_one(to_trace_t *item)
 {
   assert(item);
+  encore_passive_lf_so_t *f;
   pony_ctx_t *ctx = pony_ctx();
   {
     trace_address_list *cur = item->address;
@@ -104,7 +121,11 @@ static void clean_one(to_trace_t *item)
       if (!cur) {
         break;
       }
-      gc_recvobject_shallow(ctx, cur->address);
+      f = cur->address;
+      assert(f->published);
+      if (_atomic_load(&f->rc) == 0) {
+        gc_recvobject_shallow(ctx, cur->address);
+      }
       pre = cur;
       cur = cur->next;
       POOL_FREE(trace_address_list, pre);
@@ -272,11 +293,38 @@ void encore_so_finalinzer(void *p)
   duration_spscq_destroy(&this->so_gc.duration_q);
 }
 
+static void so_lockfree_publish(void *p)
+{
+  assert(p);
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  if (!f->published) {
+    f->published = true;
+  }
+}
+
+bool so_lockfree_is_published(void *p)
+{
+  assert(p);
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  return f->published;
+}
+
+void so_lockfree_chain_final(pony_ctx_t *ctx, void *p)
+{
+  if (!p) { return; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  assert(_atomic_load(&f->rc) != 0);
+  if (_atomic_sub(&f->rc, 1) == 1) {
+    gc_recvobject_shallow(ctx, f);
+  }
+}
+
 void so_lockfree_send(pony_ctx_t *ctx)
 {
   void *p;
   while(ctx->lf_tmp_stack != NULL) {
     ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
+    so_lockfree_publish(p);
     gc_sendobject_shallow(ctx, p);
   }
   gc_sendobject_shallow_done(ctx);
@@ -300,21 +348,8 @@ void so_lockfree_recv(pony_ctx_t *ctx)
   gc_recvobject_shallow_done(ctx);
 }
 
-bool so_lockfree_is_reachable(pony_ctx_t *ctx, void *target)
-{
-  bool ret = false;
-  void *p;
-  while(ctx->lf_tmp_stack != NULL) {
-    ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
-    ret = ret || p == target;
-  }
-  return ret;
-}
-
 void so_lockfree_delay_recv_using_send(pony_ctx_t *ctx, void *p)
 {
-  gc_sendobject(ctx, p, NULL);
-  pony_send_done(ctx);
   ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
 }
 
@@ -330,4 +365,97 @@ void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item)
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p)
 {
   ctx->boundary = p;
+}
+
+size_t so_lockfree_get_rc(void *p)
+{
+  if (!p) { return 0; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  return _atomic_load(&f->rc);
+}
+
+size_t so_lockfree_inc_rc(void *p)
+{
+  if (!p) { return 0; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  return _atomic_add(&f->rc, 1);
+}
+
+size_t so_lockfree_dec_rc(void *p)
+{
+  if (!p) { return 0; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  assert(_atomic_load(&f->rc) != 0);
+  return _atomic_sub(&f->rc, 1);
+}
+
+bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
+    pony_trace_fn F)
+{
+  assert(X);
+  bool ret;
+
+  pony_gc_collect_to_send(ctx);
+  so_lockfree_set_trace_boundary(ctx, Y);
+  pony_traceobject(ctx, Z, F);
+  pony_gc_collect_to_send_done(ctx);
+
+  so_lockfree_inc_rc(Z);
+
+  ret = _atomic_cas((void**)X, &Y, Z);
+  if (ret) {
+    if (so_lockfree_dec_rc(Y) == 1) {
+      so_lockfree_delay_recv_using_send(ctx, Y);
+    }
+    so_lockfree_send(ctx);
+  } else {
+    so_lockfree_dec_rc(Z);
+    so_lockfree_unsend(ctx);
+  }
+  return ret;
+}
+
+bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
+    pony_trace_fn F)
+{
+  assert(X);
+  bool ret = _atomic_cas((void**)X, &Y, Z);
+  if (ret) {
+    pony_gc_collect_to_recv(ctx);
+    so_lockfree_set_trace_boundary(ctx, Z);
+    pony_traceobject(ctx, Y, F);
+    pony_gc_collect_to_recv_done(ctx);
+
+    so_lockfree_recv(ctx);
+
+    gc_sendobject_shallow(ctx, Y);
+    gc_sendobject_shallow_done(ctx);
+
+    so_lockfree_inc_rc(Z);
+    if (so_lockfree_dec_rc(Y) == 1) {
+      so_lockfree_delay_recv_using_send(ctx, Y);
+    }
+  }
+  return ret;
+}
+
+void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
+    pony_trace_fn F)
+{
+  pony_gc_collect_to_send(ctx);
+  so_lockfree_set_trace_boundary(ctx, NULL);
+  pony_traceobject(ctx, rhs, F);
+  pony_gc_collect_to_send_done(ctx);
+
+  so_lockfree_inc_rc(rhs);
+  if (so_lockfree_dec_rc(lhs) == 1) {
+    gc_recvobject_shallow(ctx, lhs);
+  };
+
+  so_lockfree_send(ctx);
+}
+void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs)
+{
+   so_lockfree_inc_rc(rhs);
+   so_lockfree_dec_rc(lhs);
 }

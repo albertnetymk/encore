@@ -17,6 +17,7 @@ module CodeGen.Context (
   lookupField,
   lookupMethod,
   lookupCalledType,
+  lookup_implemented_capa,
 ) where
 
 import Identifiers
@@ -75,3 +76,6 @@ lookupMethod ty m = Tbl.lookupMethod ty m . classTable
 
 lookupCalledType :: Type -> Name -> Context -> Type
 lookupCalledType ty m = Tbl.lookupCalledType ty m . classTable
+
+lookup_implemented_capa :: Type -> Context -> Type
+lookup_implemented_capa t = Tbl.lookup_implemented_capa t . classTable

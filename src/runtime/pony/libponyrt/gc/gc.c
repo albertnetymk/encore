@@ -111,7 +111,7 @@ void gc_acquireobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
   }
 }
 
-void gc_lf_try_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
+void gc_lf_collect_to_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
 {
   if (p == ctx->boundary) {
     return;
@@ -150,7 +150,7 @@ void gc_lf_try_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
   }
 }
 
-void gc_lf_try_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
+void gc_lf_collect_to_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f)
 {
   if (p == ctx->boundary) {
     return;

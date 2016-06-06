@@ -26,9 +26,9 @@ typedef struct gc_t
 
 DECLARE_STACK(gcstack, void);
 
-void gc_lf_try_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
+void gc_lf_collect_to_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
 
-void gc_lf_try_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
+void gc_lf_collect_to_recvobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
 
 void gc_sendobject(pony_ctx_t* ctx, void* p, pony_trace_fn f);
 

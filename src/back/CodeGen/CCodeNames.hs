@@ -179,6 +179,9 @@ fixPrimes name
 selfTypeField :: CCode Name
 selfTypeField = Nam $ encoreName "self_type" ""
 
+lf_so_passive_final_name :: CCode Name
+lf_so_passive_final_name = Nam "so_lockfree_chain_final"
+
 -- | each method is implemented as a function with a `this`
 -- pointer. This is the name of that function
 methodImplName :: Ty.Type -> ID.Name -> CCode Name
@@ -219,6 +222,9 @@ encoreCreateSoName = Nam "encore_create_so"
 
 encoreAllocName :: CCode Name
 encoreAllocName = Nam "encore_alloc"
+
+encore_alloc_final_name :: CCode Name
+encore_alloc_final_name = Nam "encore_alloc_final"
 
 partySequence :: CCode Name
 partySequence = Nam "party_sequence"
@@ -329,6 +335,10 @@ classDispatchName clazz =
 classTraceFnName :: Ty.Type -> CCode Name
 classTraceFnName clazz =
     Nam $ encoreName "trace" (Ty.getId clazz)
+
+so_lockfree_subord_finalizer_name :: Ty.Type -> CCode Name
+so_lockfree_subord_finalizer_name clazz =
+    Nam $ encoreName "so_lockfree_subord_finalizer" $ Ty.getId clazz
 
 class_inverse_trace_fn_name :: Ty.Type -> CCode Name
 class_inverse_trace_fn_name clazz =

@@ -69,75 +69,26 @@ typedef struct encore_so_t
   so_gc_t so_gc;
 } encore_so_t;
 
+typedef struct encore_passive_lf_so_t {
+  pony_type_t *t;
+  size_t rc;
+  bool published;
+} encore_passive_lf_so_t;
+
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
 #define UNFREEZE(field) ((void*)(((uintptr_t)field) & ~1UL))
 
-#define _CAS_LINK_WRAPPER(X, Y, Z, F)            \
-  ({                                             \
-    bool ret;                                    \
-    pony_gc_try_send(_ctx);                      \
-    so_lockfree_set_trace_boundary(_ctx, Y);     \
-    pony_traceobject(_ctx, Z, F);                \
-    pony_gc_try_send_done(_ctx);                 \
-    ret = __sync_bool_compare_and_swap(X, Y, Z); \
-    if (ret) {                                   \
-      so_lockfree_send(_ctx);                    \
-    } else {                                     \
-      so_lockfree_unsend(_ctx);                  \
-    }                                            \
-    ret;                                         \
-  })                                             \
+#define _SO_LOCKFREE_CAS_LINK_WRAPPER(X, Y, Z, F) \
+  _so_lockfree_cas_link_wrapper(_ctx, X, Y, Z, F)
 
-#define _CAS_UNLINK_WRAPPER(X, Y, Z, F, IF)             \
-  ({                                                    \
-    pony_gc_try_recv(_ctx);                             \
-    so_lockfree_set_trace_boundary(_ctx, NULL);         \
-    pony_traceobject(_ctx, _this, IF);                  \
-    pony_gc_try_recv_done(_ctx);                        \
-    bool reachable = so_lockfree_is_reachable(_ctx, Y); \
-    bool ret = __sync_bool_compare_and_swap(X, Y, Z);   \
-    if (ret) {                                          \
-      pony_gc_try_recv(_ctx);                           \
-      so_lockfree_set_trace_boundary(_ctx, Z);          \
-      pony_traceobject(_ctx, Y, F);                     \
-      pony_gc_try_recv_done(_ctx);                      \
-      so_lockfree_recv(_ctx);                           \
-      if (!reachable) {                                 \
-        so_lockfree_delay_recv_using_send(_ctx, Y);     \
-      }                                                 \
-    }                                                   \
-    ret;                                                \
-  })                                                    \
+#define _SO_LOCKFREE_CAS_UNLINK_WRAPPER(X, Y, Z, F) \
+  _so_lockfree_cas_unlink_wrapper(_ctx, X, Y, Z, F)
 
-// #define _UNLINK_LEFTOVER(P)
-//   ({
-//    // deal with double bar ownership fields
-//   })
+#define _SO_LOCKFREE_ASSIGN_SPEC_WRAPPER(LHS, RHS, F) \
+  so_lockfree_assign_spec_wrapper(_ctx, LHS, RHS, F)
 
-#define _CAS_TRY_WRAPPER(X, Y, Z, F)             \
-  ({                                             \
-    bool ret;                                    \
-    pony_gc_try_send(_ctx);                      \
-    so_lockfree_set_trace_boundary(_ctx, NULL);  \
-    pony_traceobject(_ctx, (UNFREEZE(Z)), F);    \
-    pony_gc_try_send_done(_ctx);                 \
-    ret = __sync_bool_compare_and_swap(X, Y, Z); \
-    if (ret) {                                   \
-      so_lockfree_send(_ctx);                    \
-    } else {                                     \
-      so_lockfree_unsend(_ctx);                  \
-    }                                            \
-    ret;                                         \
-  })                                             \
-
-#define _ASSIGN_CONSUME_WRAPPER(X, F)          \
-  ({                                           \
-   pony_gc_try_send(_ctx);                     \
-   so_lockfree_set_trace_boundary(_ctx, NULL); \
-   pony_traceobject(_ctx, X, F);               \
-   pony_gc_try_send_done(_ctx);                \
-   so_lockfree_send(_ctx);                     \
-   })                                          \
+#define _SO_LOCKFREE_ASSIGN_SUBORD_WRAPPER(LHS, RHS) \
+  _so_lockfree_assign_subord_wrapper(LHS, RHS)
 
 typedef struct to_trace_t to_trace_t;
 
@@ -146,15 +97,25 @@ to_trace_t *so_to_trace_new(encore_so_t *this);
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item);
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item);
 void encore_so_finalinzer(void *p);
-void pony_gc_try_send(pony_ctx_t* ctx);
-void pony_gc_try_send_done(pony_ctx_t *ctx);
-void pony_gc_try_recv(pony_ctx_t* ctx);
-void pony_gc_try_recv_done(pony_ctx_t *ctx);
+void pony_gc_collect_to_send(pony_ctx_t* ctx);
+void pony_gc_collect_to_send_done(pony_ctx_t *ctx);
+void pony_gc_collect_to_recv(pony_ctx_t* ctx);
+void pony_gc_collect_to_recv_done(pony_ctx_t *ctx);
 void so_lockfree_send(pony_ctx_t *ctx);
 void so_lockfree_unsend(pony_ctx_t *ctx);
 void so_lockfree_recv(pony_ctx_t *ctx);
-bool so_lockfree_is_reachable(pony_ctx_t *ctx, void *target);
 void so_lockfree_delay_recv_using_send(pony_ctx_t *ctx, void *p);
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item);
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);
+void so_lockfree_chain_final(pony_ctx_t *ctx, void *p);
+size_t so_lockfree_inc_rc(void *p);
+size_t so_lockfree_dec_rc(void *p);
+bool so_lockfree_is_published(void *p);
+bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
+    pony_trace_fn F);
+bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
+    pony_trace_fn F);
+void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
+    pony_trace_fn F);
+void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs);
 #endif /* end of include guard: SHARED_OBJECT_H_L6JOK8YX */

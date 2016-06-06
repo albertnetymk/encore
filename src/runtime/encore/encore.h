@@ -101,7 +101,6 @@ typedef struct default_task_env_s {
   encore_arg_t value;
 } default_task_env_s;
 
-
 typedef struct stack_page {
   void *stack;
   struct stack_page *next;
@@ -135,6 +134,7 @@ encore_actor_t *encore_peer_create(pony_type_t *type);
 
 /// Allocate s bytes of memory, zeroed out
 void *encore_alloc(pony_ctx_t *ctx, size_t s);
+void *encore_alloc_final(pony_ctx_t *ctx, size_t s, pony_final_fn final);
 #ifdef NO_GC
 #include <stdlib.h>
 #define encore_alloc(ctx,size) calloc(size,1)

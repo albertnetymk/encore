@@ -43,7 +43,7 @@ translateActiveClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
       [typeStructDecl cdecl] ++
       [runtimeTypeInitFunDecl cdecl] ++
       [tracefunDecl cdecl] ++
-      [constructorImpl Active cname] ++
+      [constructorImpl Active cname ctable] ++
       methodImpls ++
       (map (methodImplWithFuture cname) nonStreamMethods) ++
       (map (methodImplOneWay cname) nonStreamMethods) ++
@@ -376,8 +376,8 @@ ponyGcSendStream argPairs =
 
 data Activity = Active | Shared | Passive
 
-constructorImpl :: Activity -> Ty.Type -> CCode Toplevel
-constructorImpl act cname =
+constructorImpl :: Activity -> Ty.Type -> ClassTable -> CCode Toplevel
+constructorImpl act cname ctable =
   let
     retType = translate cname
     fName = constructorImplName cname
@@ -407,8 +407,13 @@ constructorImpl act cname =
       Call encoreCreateName [AsExpr encoreCtxVar, runtimeType]
     createCall Shared =
       Call encoreCreateSoName [AsExpr encoreCtxVar, runtimeType]
-    createCall Passive =
-      Call encoreAllocName [AsExpr encoreCtxVar, Sizeof classType]
+    createCall Passive
+      | is_subord cname ctable =
+          Call encore_alloc_final_name
+            [AsExpr encoreCtxVar, Sizeof classType,
+             Cast (Ptr void) $ so_lockfree_subord_finalizer_name cname]
+      | otherwise =
+          Call encoreAllocName [AsExpr encoreCtxVar, Sizeof classType]
 
     decorateThis :: Activity -> [CCode Stat]
     decorateThis Passive = [Assign (this `Arrow` selfTypeField) runtimeType]
@@ -449,7 +454,7 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [runtimeTypeInitFunDecl cdecl] ++
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
-    [constructorImpl Shared cname] ++
+    [constructorImpl Shared cname ctable] ++
     methodImpls ++
     [so_method_impl_with_future strategy method | method <- cmethods, strategy <- strategies] ++
     (map (methodImplOneWay cname) cmethods) ++
@@ -552,9 +557,10 @@ translatePassiveClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     (LocalInclude "header.h") :
     [traitMethodSelector ctable cdecl] ++
     [runtimeTypeInitFunDecl cdecl] ++
+    [so_lockfree_subord_finalizer cdecl ctable] ++
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
-    [constructorImpl Passive cname] ++
+    [constructorImpl Passive cname ctable] ++
     methodImpls ++
     [dispatchfunDecl] ++
     [runtimeTypeDecl cname]
@@ -610,6 +616,32 @@ runtimeTypeInitFunDecl A.Class{A.cname, A.cfields, A.cmethods} =
           initRuntimeType ty =
               Assign (Var "this" `Arrow` typeVarRefName ty)
                      (Call (Nam "va_arg") [Var "params", Var "pony_type_t *"])
+
+so_lockfree_subord_finalizer :: A.ClassDecl -> ClassTable -> CCode Toplevel
+so_lockfree_subord_finalizer A.Class{A.cname, A.cfields, A.cmethods} ctable =
+  Function void (so_lockfree_subord_finalizer_name cname)
+    [(Ptr void, Var "p")]
+    (Seq $
+      [ Statement $ If (Call (Nam "so_lockfree_is_published") [Var "p"])
+          Skip $ Return $ Var ""
+      , Assign (Decl (Ptr encoreCtxT, AsLval encoreCtxName)) $
+         Call (Nam "encore_ctx") ([] :: [CCode Lval])
+      , Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+         (Var "p")
+      ] ++
+      map traceField cfields)
+  where
+    traceField A.Field {A.fmods, A.ftype, A.fname}
+      | is_subord ftype ctable =
+          Statement $ Call lf_so_passive_final_name
+            [encoreCtxVar, Var "_this" `Arrow` fieldName fname]
+      | otherwise =
+          Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
+
+is_subord t ctable =
+  Ty.isClassType t &&
+    (any Ty.isSpineRefType $
+      Ty.typesFromCapability $ lookup_implemented_capa t ctable)
 
 inverse_trace_fun_decls :: A.ClassDecl -> CCode Toplevel
 inverse_trace_fun_decls A.Class{A.cname, A.cfields, A.cmethods} =

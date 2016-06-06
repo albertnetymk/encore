@@ -365,6 +365,14 @@ void *encore_alloc(pony_ctx_t *ctx, size_t s)
   return mem;
 }
 
+void *encore_alloc_final(pony_ctx_t *ctx, size_t s, pony_final_fn final)
+{
+  void *mem = pony_alloc_final(ctx, s, final);
+  memset(mem, 0, s);
+
+  return mem;
+}
+
 void *encore_realloc(pony_ctx_t *ctx, void* p, size_t s)
 {
     void *mem = pony_realloc(ctx, p, s);

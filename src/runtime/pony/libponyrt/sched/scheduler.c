@@ -494,6 +494,8 @@ pony_ctx_t* scheduler_init(uint32_t threads, bool noyield)
     threads = cpu_count();
 
   scheduler_count = threads;
+  // scheduler_count = 2;
+  // scheduler_count = 1;
   scheduler = (scheduler_t*)pool_alloc_size(
     scheduler_count * sizeof(scheduler_t));
   memset(scheduler, 0, scheduler_count * sizeof(scheduler_t));
