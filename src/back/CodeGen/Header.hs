@@ -83,8 +83,11 @@ generateHeader p =
     [commentSection "Reverse trace functions"] ++
     reverse_trace_fn_decls ++
 
-    [commentSection "so lockfree non spec apply"] ++
-    class_non_spec_fields_apply_decls ++
+    [commentSection "class_non_spec_subord_fields_apply_decls"] ++
+    class_non_spec_subord_fields_apply_decls ++
+
+    [commentSection "class_subord_fields_final_apply_decls"] ++
+    class_subord_fields_final_apply_decls ++
 
     [commentSection "Runtime type init functions"] ++
     runtimeTypeFnDecls ++
@@ -115,6 +118,7 @@ generateHeader p =
 
      allTraits = A.allTraits p
      allclasses = A.allClasses p
+     all_shared_classes = filter A.isShared allclasses
      allfunctions = A.allFunctions p
      allembedded = A.allEmbedded p
 
@@ -179,12 +183,20 @@ generateHeader p =
                [Ptr encoreCtxT,Ptr void]
              | field <- cfields]
 
-     class_non_spec_fields_apply_decls = map non_spec allclasses
+     class_non_spec_subord_fields_apply_decls = map non_spec all_shared_classes
        where
          non_spec A.Class{A.cname, A.cfields} =
            Concat $
-             [FunctionDecl void (class_non_spec_fields_apply_name cname)
+             [FunctionDecl void (class_non_spec_subord_fields_apply_name cname)
                [Ptr void]
+             | field <- cfields]
+
+     class_subord_fields_final_apply_decls = map subord all_shared_classes
+       where
+         subord A.Class{A.cname, A.cfields} =
+           Concat $
+             [FunctionDecl void (class_subord_fields_final_apply_name cname)
+               [Ptr encoreCtxT,Ptr void]
              | field <- cfields]
 
      runtimeTypeFnDecls = map runtimeTypeFnDecl allclasses

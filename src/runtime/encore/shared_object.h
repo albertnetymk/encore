@@ -42,7 +42,10 @@ typedef struct {
   };
 } pending_lock_t;
 
+typedef void (*so_lockfree_final_cb_fn) (pony_ctx_t *ctx, void *p);
+
 typedef struct so_gc_t {
+  so_lockfree_final_cb_fn final_cb;
   aba_entry_t aba_entry;
   duration_t *current_d;
   duration_spscq_t duration_q;
@@ -93,6 +96,9 @@ typedef struct encore_passive_lf_so_t {
 typedef struct to_trace_t to_trace_t;
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type);
+void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb);
+void so_lockfree_non_spec_subord_field_apply(void *p);
+void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p);
 to_trace_t *so_to_trace_new(encore_so_t *this);
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item);
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item);

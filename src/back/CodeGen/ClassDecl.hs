@@ -455,7 +455,8 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
     [constructorImpl Shared cname ctable] ++
-    [class_non_spec_fields_apply cdecl] ++
+    [class_non_spec_subord_fields_apply cdecl ctable] ++
+    [class_subord_fields_final_apply cdecl ctable] ++
     methodImpls ++
     [so_method_impl_with_future strategy method | method <- cmethods, strategy <- strategies] ++
     (map (methodImplOneWay cname) cmethods) ++
@@ -644,9 +645,10 @@ is_subord t ctable =
     (any Ty.isSpineRefType $
       Ty.typesFromCapability $ lookup_implemented_capa t ctable)
 
-class_non_spec_fields_apply :: A.ClassDecl -> CCode Toplevel
-class_non_spec_fields_apply A.Class{A.cname, A.cfields, A.cmethods} =
-  Function void (class_non_spec_fields_apply_name cname)
+class_non_spec_subord_fields_apply :: A.ClassDecl -> ClassTable
+  -> CCode Toplevel
+class_non_spec_subord_fields_apply A.Class{A.cname, A.cfields} ctable =
+  Function void (class_non_spec_subord_fields_apply_name cname)
     [(Ptr void, Var "p")]
     (Seq $
      (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
@@ -656,13 +658,35 @@ class_non_spec_fields_apply A.Class{A.cname, A.cfields, A.cmethods} =
     black_list = [A.Spec, A.Once]
 
     traceField A.Field {A.fmods, A.ftype, A.fname}
-      | null $ fmods `intersect` black_list =
+      | null (fmods `intersect` black_list) && is_subord ftype ctable =
+          let var = Var . show $ fieldName fname
+              field = Var "_this" `Arrow` fieldName fname
+              fieldAssign = Assign (Decl (translate ftype, var)) field
+          in Seq [ fieldAssign
+                 , Statement $ Call
+                     (Nam "so_lockfree_non_spec_subord_field_apply") [field]]
+      | otherwise =
+          Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
+
+class_subord_fields_final_apply :: A.ClassDecl -> ClassTable
+  -> CCode Toplevel
+class_subord_fields_final_apply A.Class{A.cname, A.cfields} ctable =
+  Function void (class_subord_fields_final_apply_name cname)
+    [(Ptr encoreCtxT, encoreCtxVar), (Ptr void, Var "p")]
+    (Seq $
+     (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+             (Var "p")) :
+      map traceField cfields)
+  where
+    traceField A.Field {A.fmods, A.ftype, A.fname}
+      | is_subord ftype ctable =
           let var = Var . show $ fieldName fname
               field = Var "_this" `Arrow` fieldName fname
               fieldAssign = Assign (Decl (translate ftype, var)) field
           in Seq [ fieldAssign
                  , Statement $
-                     Call (Nam "so_lockfree_non_spec_field_apply") [field]]
+                     Call (Nam "so_lockfree_subord_field_final_apply")
+                       [encoreCtxVar, field]]
       | otherwise =
           Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
 

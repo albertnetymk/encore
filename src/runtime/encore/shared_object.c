@@ -139,8 +139,7 @@ static void collect(encore_so_t *this)
 {
   // multithread
   so_gc_t *so_gc = &this->so_gc;
-  uint32_t pending = 0;
-  if (!_atomic_cas(&so_gc->pending_lock.pending, &pending, 1)) {
+  if (_atomic_add(&so_gc->pending_lock.pending, 1) != 0) {
     return;
   }
   uint32_t lock = 0;
@@ -151,12 +150,17 @@ static void collect(encore_so_t *this)
   pending_lock_t pending_lock = (pending_lock_t) {.lock = 1};
   pending_lock_t new_pending_lock = (pending_lock_t) {};
   do {
-    _atomic_store(&so_gc->pending_lock.pending, 0);
-    d = duration_spscq_peek(&so_gc->duration_q);
-    if (d && _atomic_load(&d->collectible)) {
+    _atomic_sub(&so_gc->pending_lock.pending, 1);
+    while ((d = duration_spscq_peek(&so_gc->duration_q))) {
+      if (!_atomic_load(&d->collectible)) {
+        break;
+      }
       clean_one(d->head);
       duration_t *_d = duration_spscq_pop(&so_gc->duration_q);
       assert(d == _d);
+    }
+    if (so_gc->pending_lock.pending > 0) {
+      continue;
     }
     pending_lock.pending = 0;
     if (_atomic_cas(&so_gc->pending_lock.dw, &pending_lock.dw,
@@ -267,6 +271,12 @@ encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
   return this;
 }
 
+void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb)
+{
+  encore_so_t *this = p;
+  this->so_gc.final_cb = final_cb;
+}
+
 to_trace_t *so_to_trace_new(encore_so_t *this)
 {
   to_trace_t *item = POOL_ALLOC(to_trace_t);
@@ -286,10 +296,11 @@ void so_to_trace(to_trace_t *item, void *p)
 
 void encore_so_finalinzer(void *p)
 {
-  return;
   assert(p);
   encore_so_t *this = p;
-  assert(duration_spscq_pop(&this->so_gc.duration_q) == NULL);
+  assert(this->so_gc.final_cb);
+  this->so_gc.final_cb(pony_ctx(), this);
+  assert(duration_spscq_peek(&this->so_gc.duration_q) == NULL);
   duration_spscq_destroy(&this->so_gc.duration_q);
 }
 
@@ -302,11 +313,22 @@ static void so_lockfree_publish(void *p)
   }
 }
 
-void so_lockfree_non_spec_field_apply(void *p)
+void so_lockfree_non_spec_subord_field_apply(void *p)
 {
   so_lockfree_publish(p);
   gc_sendobject_shallow(pony_ctx(), p);
   so_lockfree_inc_rc(p);
+}
+
+void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p)
+{
+  if (!p) { return; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  assert(f->published);
+  assert(_atomic_load(&f->rc) != 0);
+  if (_atomic_sub(&f->rc, 1) == 1) {
+    gc_recvobject_shallow(ctx, f);
+  }
 }
 
 bool so_lockfree_is_published(void *p)

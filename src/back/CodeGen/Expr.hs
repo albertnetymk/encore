@@ -527,9 +527,15 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
     | Ty.isSharedClassType ty = delegateUse callTheMethodSync
     | otherwise = delegateUse callTheMethodSync
     where
-      so_lockfree_non_spec_rc this
+      so_lockfree_after_hook this
         | Ty.isSharedClassType ty =
-            Statement $ Call (class_non_spec_fields_apply_name ty) [this]
+            Seq $
+              [ Call (class_non_spec_subord_fields_apply_name ty) [this]
+              , Call (Nam "so_lockfree_register_final_cb")
+                  [ AsExpr this
+                  , Cast (Ptr void) $ class_subord_fields_final_apply_name ty
+                  ]
+              ]
         | otherwise = Skip
 
       delegateUse methodCall =
@@ -550,7 +556,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
                 initArgs ++
                 [ Statement $ callTypeParamsInit $ (AsExpr nnew):typeArgs
                 , Statement result
-                , so_lockfree_non_spec_rc nnew]
+                , so_lockfree_after_hook nnew]
               )
 
   translate (A.Peer {A.ty})
