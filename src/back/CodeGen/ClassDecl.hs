@@ -455,6 +455,7 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
     [constructorImpl Shared cname ctable] ++
+    [class_non_spec_fields_apply cdecl] ++
     methodImpls ++
     [so_method_impl_with_future strategy method | method <- cmethods, strategy <- strategies] ++
     (map (methodImplOneWay cname) cmethods) ++
@@ -642,6 +643,28 @@ is_subord t ctable =
   Ty.isClassType t &&
     (any Ty.isSpineRefType $
       Ty.typesFromCapability $ lookup_implemented_capa t ctable)
+
+class_non_spec_fields_apply :: A.ClassDecl -> CCode Toplevel
+class_non_spec_fields_apply A.Class{A.cname, A.cfields, A.cmethods} =
+  Function void (class_non_spec_fields_apply_name cname)
+    [(Ptr void, Var "p")]
+    (Seq $
+     (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+             (Var "p")) :
+      map traceField cfields)
+  where
+    black_list = [A.Spec, A.Once]
+
+    traceField A.Field {A.fmods, A.ftype, A.fname}
+      | null $ fmods `intersect` black_list =
+          let var = Var . show $ fieldName fname
+              field = Var "_this" `Arrow` fieldName fname
+              fieldAssign = Assign (Decl (translate ftype, var)) field
+          in Seq [ fieldAssign
+                 , Statement $
+                     Call (Nam "so_lockfree_non_spec_field_apply") [field]]
+      | otherwise =
+          Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
 
 inverse_trace_fun_decls :: A.ClassDecl -> CCode Toplevel
 inverse_trace_fun_decls A.Class{A.cname, A.cfields, A.cmethods} =

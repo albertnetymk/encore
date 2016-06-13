@@ -118,4 +118,5 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F);
 void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs);
+void so_lockfree_non_spec_field_apply(void *p);
 #endif /* end of include guard: SHARED_OBJECT_H_L6JOK8YX */

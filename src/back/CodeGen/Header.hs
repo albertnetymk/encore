@@ -83,6 +83,9 @@ generateHeader p =
     [commentSection "Reverse trace functions"] ++
     reverse_trace_fn_decls ++
 
+    [commentSection "so lockfree non spec apply"] ++
+    class_non_spec_fields_apply_decls ++
+
     [commentSection "Runtime type init functions"] ++
     runtimeTypeFnDecls ++
 
@@ -174,6 +177,14 @@ generateHeader p =
              [FunctionDecl void
                (class_inverse_field_trace_fn_name cname $ A.fname field)
                [Ptr encoreCtxT,Ptr void]
+             | field <- cfields]
+
+     class_non_spec_fields_apply_decls = map non_spec allclasses
+       where
+         non_spec A.Class{A.cname, A.cfields} =
+           Concat $
+             [FunctionDecl void (class_non_spec_fields_apply_name cname)
+               [Ptr void]
              | field <- cfields]
 
      runtimeTypeFnDecls = map runtimeTypeFnDecl allclasses

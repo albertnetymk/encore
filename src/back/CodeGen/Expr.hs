@@ -527,6 +527,11 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
     | Ty.isSharedClassType ty = delegateUse callTheMethodSync
     | otherwise = delegateUse callTheMethodSync
     where
+      so_lockfree_non_spec_rc this
+        | Ty.isSharedClassType ty =
+            Statement $ Call (class_non_spec_fields_apply_name ty) [this]
+        | otherwise = Skip
+
       delegateUse methodCall =
         let
           fName = constructorImplName ty
@@ -544,7 +549,8 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
                 [constructorCall] ++
                 initArgs ++
                 [ Statement $ callTypeParamsInit $ (AsExpr nnew):typeArgs
-                , Statement result]
+                , Statement result
+                , so_lockfree_non_spec_rc nnew]
               )
 
   translate (A.Peer {A.ty})

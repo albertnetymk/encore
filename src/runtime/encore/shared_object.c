@@ -302,6 +302,13 @@ static void so_lockfree_publish(void *p)
   }
 }
 
+void so_lockfree_non_spec_field_apply(void *p)
+{
+  so_lockfree_publish(p);
+  gc_sendobject_shallow(pony_ctx(), p);
+  so_lockfree_inc_rc(p);
+}
+
 bool so_lockfree_is_published(void *p)
 {
   assert(p);
@@ -442,17 +449,10 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F)
 {
-  pony_gc_collect_to_send(ctx);
-  so_lockfree_set_trace_boundary(ctx, NULL);
-  pony_traceobject(ctx, rhs, F);
-  pony_gc_collect_to_send_done(ctx);
-
   so_lockfree_inc_rc(rhs);
   if (so_lockfree_dec_rc(lhs) == 1) {
     gc_recvobject_shallow(ctx, lhs);
   };
-
-  so_lockfree_send(ctx);
 }
 void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs)
 {
