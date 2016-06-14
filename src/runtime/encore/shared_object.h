@@ -81,6 +81,9 @@ typedef struct encore_passive_lf_so_t {
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
 #define UNFREEZE(field) ((void*)(((uintptr_t)field) & ~1UL))
 
+#define _SO_LOCKFREE_CAS_TRY_WRAPPER(X, Y, Z, F) \
+  _so_lockfree_cas_try_wrapper(_ctx, X, Y, Z, F)
+
 #define _SO_LOCKFREE_CAS_LINK_WRAPPER(X, Y, Z, F) \
   _so_lockfree_cas_link_wrapper(_ctx, X, Y, Z, F)
 
@@ -97,7 +100,9 @@ typedef struct to_trace_t to_trace_t;
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type);
 void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb);
-void so_lockfree_non_spec_subord_field_apply(void *p);
+void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, void *p);
+void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, void *p);
+void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx);
 void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p);
 to_trace_t *so_to_trace_new(encore_so_t *this);
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item);
@@ -117,6 +122,8 @@ void so_lockfree_chain_final(pony_ctx_t *ctx, void *p);
 size_t so_lockfree_inc_rc(void *p);
 size_t so_lockfree_dec_rc(void *p);
 bool so_lockfree_is_published(void *p);
+bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
+    pony_trace_fn F);
 bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F);
 bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,

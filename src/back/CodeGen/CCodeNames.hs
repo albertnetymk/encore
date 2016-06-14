@@ -340,9 +340,9 @@ so_lockfree_subord_finalizer_name :: Ty.Type -> CCode Name
 so_lockfree_subord_finalizer_name clazz =
     Nam $ encoreName "so_lockfree_subord_finalizer" $ Ty.getId clazz
 
-class_non_spec_subord_fields_apply_name :: Ty.Type -> CCode Name
-class_non_spec_subord_fields_apply_name clazz =
-    Nam $ encoreName "non_spec_fields_apply" $ Ty.getId clazz
+class_subord_fields_apply_name :: Ty.Type -> CCode Name
+class_subord_fields_apply_name clazz =
+    Nam $ encoreName "subord_fields_apply" $ Ty.getId clazz
 
 class_subord_fields_final_apply_name :: Ty.Type -> CCode Name
 class_subord_fields_final_apply_name clazz =

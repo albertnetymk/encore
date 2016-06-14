@@ -11,22 +11,6 @@
 #define _atomic_sub(PTR, VAL) \
   (__atomic_fetch_sub(PTR, VAL, __ATOMIC_RELEASE))
 
-// #define _CAS_TRY_WRAPPER(X, Y, Z, F)             \
-//   ({                                             \
-//     bool ret;                                    \
-//     pony_gc_try_send(_ctx);                      \
-//     so_lockfree_set_trace_boundary(_ctx, NULL);  \
-//     pony_traceobject(_ctx, (UNFREEZE(Z)), F);    \
-//     pony_gc_try_send_done(_ctx);                 \
-//     ret = __sync_bool_compare_and_swap(X, Y, Z); \
-//     if (ret) {                                   \
-//       so_lockfree_send(_ctx);                    \
-//     } else {                                     \
-//       so_lockfree_unsend(_ctx);                  \
-//     }                                            \
-//     ret;                                         \
-//   })                                             \
-
 static inline void gc_sendobject_shallow(pony_ctx_t *ctx, void *p)
 {
   gc_sendobject(ctx, p, NULL);
@@ -313,11 +297,24 @@ static void so_lockfree_publish(void *p)
   }
 }
 
-void so_lockfree_non_spec_subord_field_apply(void *p)
+void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, void *p)
 {
+  if (!p) { return; }
   so_lockfree_publish(p);
-  gc_sendobject_shallow(pony_ctx(), p);
+  gc_sendobject_shallow(ctx, p);
+}
+
+void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, void *p)
+{
+  if (!p) { return; }
+  so_lockfree_publish(p);
+  gc_sendobject_shallow(ctx, p);
   so_lockfree_inc_rc(p);
+}
+
+void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx)
+{
+  gc_sendobject_shallow_done(ctx);
 }
 
 void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p)
@@ -418,6 +415,32 @@ size_t so_lockfree_dec_rc(void *p)
   return _atomic_sub(&f->rc, 1);
 }
 
+bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *_Z,
+    pony_trace_fn F)
+{
+  assert(X);
+  bool ret;
+  void *Z = UNFREEZE(_Z);
+
+  pony_gc_collect_to_send(ctx);
+  so_lockfree_set_trace_boundary(ctx, NULL);
+  pony_traceobject(ctx, Z, F);
+  pony_gc_collect_to_send_done(ctx);
+
+  so_lockfree_inc_rc(Z);
+
+  ret = _atomic_cas((void**)X, &Y, _Z);
+  if (ret) {
+    assert(Y == NULL);
+    so_lockfree_send(ctx);
+  } else {
+    so_lockfree_dec_rc(Z);
+    so_lockfree_unsend(ctx);
+  }
+
+  return ret;
+}
+
 bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F)
 {
@@ -441,6 +464,7 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     so_lockfree_dec_rc(Z);
     so_lockfree_unsend(ctx);
   }
+
   return ret;
 }
 
@@ -456,6 +480,9 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_gc_collect_to_recv_done(ctx);
 
     so_lockfree_recv(ctx);
+
+    // gc_recvobject_shallow(ctx, Y);
+    // gc_recvobject_shallow_done(ctx);
 
     gc_sendobject_shallow(ctx, Y);
     gc_sendobject_shallow_done(ctx);
@@ -476,6 +503,7 @@ void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     gc_recvobject_shallow(ctx, lhs);
   };
 }
+
 void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs)
 {
    so_lockfree_inc_rc(rhs);

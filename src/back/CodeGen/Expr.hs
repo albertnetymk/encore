@@ -530,7 +530,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
       so_lockfree_after_hook this
         | Ty.isSharedClassType ty =
             Seq $
-              [ Call (class_non_spec_subord_fields_apply_name ty) [this]
+              [ Call (class_subord_fields_apply_name ty) [this]
               , Call (Nam "so_lockfree_register_final_cb")
                   [ AsExpr this
                   , Cast (Ptr void) $ class_subord_fields_final_apply_name ty
@@ -1102,7 +1102,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
     let theArgs = [Amp $ ntarg `Arrow` field
                   ,unfreeze accType nacc
                   ,freeze argType narg]
-        theCAS = Call (Nam "_CAS_TRY_WRAPPER") $
+        theCAS = Call (Nam "_SO_LOCKFREE_CAS_TRY_WRAPPER") $
           theArgs ++ [AsExpr $ AsLval $ classTraceFnName argType]
         isUnwritten = BinOp (Nam "==") (AsExpr nacc) (unfreeze accType nacc)
         theCond = BinOp (Nam "&&") isUnwritten theCAS

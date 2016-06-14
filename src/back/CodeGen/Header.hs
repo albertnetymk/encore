@@ -83,11 +83,8 @@ generateHeader p =
     [commentSection "Reverse trace functions"] ++
     reverse_trace_fn_decls ++
 
-    [commentSection "class_non_spec_subord_fields_apply_decls"] ++
-    class_non_spec_subord_fields_apply_decls ++
-
-    [commentSection "class_subord_fields_final_apply_decls"] ++
-    class_subord_fields_final_apply_decls ++
+    [commentSection "class_subord_fields_funs_decls"] ++
+    class_subord_fields_apply_decls ++
 
     [commentSection "Runtime type init functions"] ++
     runtimeTypeFnDecls ++
@@ -183,21 +180,15 @@ generateHeader p =
                [Ptr encoreCtxT,Ptr void]
              | field <- cfields]
 
-     class_non_spec_subord_fields_apply_decls = map non_spec all_shared_classes
+     class_subord_fields_apply_decls = map each all_shared_classes
        where
-         non_spec A.Class{A.cname, A.cfields} =
+         each A.Class{A.cname} =
            Concat $
-             [FunctionDecl void (class_non_spec_subord_fields_apply_name cname)
-               [Ptr void]
-             | field <- cfields]
-
-     class_subord_fields_final_apply_decls = map subord all_shared_classes
-       where
-         subord A.Class{A.cname, A.cfields} =
-           Concat $
-             [FunctionDecl void (class_subord_fields_final_apply_name cname)
-               [Ptr encoreCtxT,Ptr void]
-             | field <- cfields]
+             [ FunctionDecl void (class_subord_fields_apply_name cname)
+                 [Ptr void]
+             , FunctionDecl void (class_subord_fields_final_apply_name cname)
+                 [Ptr encoreCtxT, Ptr void]
+             ]
 
      runtimeTypeFnDecls = map runtimeTypeFnDecl allclasses
          where

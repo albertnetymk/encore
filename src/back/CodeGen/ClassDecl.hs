@@ -455,7 +455,7 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
     [constructorImpl Shared cname ctable] ++
-    [class_non_spec_subord_fields_apply cdecl ctable] ++
+    [class_subord_fields_apply cdecl ctable] ++
     [class_subord_fields_final_apply cdecl ctable] ++
     methodImpls ++
     [so_method_impl_with_future strategy method | method <- cmethods, strategy <- strategies] ++
@@ -645,26 +645,34 @@ is_subord t ctable =
     (any Ty.isSpineRefType $
       Ty.typesFromCapability $ lookup_implemented_capa t ctable)
 
-class_non_spec_subord_fields_apply :: A.ClassDecl -> ClassTable
+class_subord_fields_apply :: A.ClassDecl -> ClassTable
   -> CCode Toplevel
-class_non_spec_subord_fields_apply A.Class{A.cname, A.cfields} ctable =
-  Function void (class_non_spec_subord_fields_apply_name cname)
+class_subord_fields_apply A.Class{A.cname, A.cfields} ctable =
+  Function void (class_subord_fields_apply_name cname)
     [(Ptr void, Var "p")]
     (Seq $
-     (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
-             (Var "p")) :
-      map traceField cfields)
+     [Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+             $ Var "p"] ++
+     [Assign (Decl (Ptr encoreCtxT, AsLval encoreCtxName))
+             $ Call (Nam "encore_ctx") ([] :: [CCode Lval])] ++
+     map traceField cfields ++
+     [Statement $
+       Call (Nam "so_lockfree_subord_fields_apply_done") [encoreCtxVar]])
   where
     black_list = [A.Spec, A.Once]
 
     traceField A.Field {A.fmods, A.ftype, A.fname}
-      | null (fmods `intersect` black_list) && is_subord ftype ctable =
+      | is_subord ftype ctable =
           let var = Var . show $ fieldName fname
               field = Var "_this" `Arrow` fieldName fname
               fieldAssign = Assign (Decl (translate ftype, var)) field
+              apply_fun_name =
+                if null (fmods `intersect` black_list) then
+                  "so_lockfree_non_spec_subord_field_apply"
+                else
+                  "so_lockfree_spec_subord_field_apply"
           in Seq [ fieldAssign
-                 , Statement $ Call
-                     (Nam "so_lockfree_non_spec_subord_field_apply") [field]]
+                 , Statement $ Call (Nam apply_fun_name) [encoreCtxVar, field]]
       | otherwise =
           Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
 
