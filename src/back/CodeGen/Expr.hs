@@ -1039,7 +1039,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
                            return id
 
   -- Warning: Extremly ugly code ahead!
-  translate cat@(A.CAT{A.args = [A.FieldAccess{A.target, A.name}
+  translate cat@(A.CAT{A.args = [first@A.FieldAccess{A.target, A.name}
                                 ,witness
                                 ,arg]
                       ,A.names}) = do
@@ -1056,14 +1056,13 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
         witnessType = A.getType witness
         argType = A.getType arg
         theTargetAccess = ntarg `Arrow` field
-        two = (witnessType, argType)
         theArgs = [Amp theTargetAccess
                   ,unfreeze witnessType nwitness
                   ,unfreeze argType narg]
         isWritten = BinOp (Nam "==") (AsExpr narg) (freeze argType narg)
         theCond = if argIsOnce
-                  then BinOp (Nam "&&") isWritten $ theCAS theArgs two
-                  else theCAS theArgs two
+                  then BinOp (Nam "&&") isWritten $ theCAS theArgs
+                  else theCAS theArgs
         theAssign = Assign (Decl (bool, tmp)) theCond
         condNull = if Ty.isRefType $ A.getType arg
                    then Statement $ If tmp (Assign narg Null) Skip
@@ -1073,22 +1072,32 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
     return (tmp, Seq [ttarg, twitness, targ, theAssign,
                       Statement condAssign, condNull])
     where
+      residualAssign :: (MonadState Ctx.Context m, UsableAs e Expr) =>
+        CCode e -> Ty.Type -> ID.Name -> m (CCode Stat)
       residualAssign narg argType f = do
+        fdecl <- gets $ Ctx.lookupField argType f
         ctx <- get
         let Just residualVar = Ctx.substLkp ctx f
         return $ Assign residualVar $
-                        Cast (translate argType) (unfreeze argType narg)
-                        `Arrow` fieldName f
-      theCAS theArgs two =
+          Call (Nam "_SO_LOCKFREE_CAS_EXTRACT_WRAPPER") $
+            [ AsExpr $ Cast (translate argType) (unfreeze argType narg)
+                `Arrow` fieldName f
+            , AsExpr $ AsLval $ classTraceFnName $ A.ftype fdecl]
+      theCAS theArgs =
         case cat of
           A.CAT{A.args = [_,A.FieldAccess{},A.VarAccess{}]} ->
             Call (Nam "_SO_LOCKFREE_CAS_LINK_WRAPPER") $
-              theArgs ++ [AsExpr $ AsLval $ classTraceFnName $ snd two]
+              theArgs ++ [trace_fn]
           A.CAT{A.args = [_,A.VarAccess{},A.FieldAccess{}]} ->
             Call (Nam "_SO_LOCKFREE_CAS_UNLINK_WRAPPER") $
-              theArgs ++
-              [AsExpr $ AsLval $ classTraceFnName $ fst two]
+              theArgs ++ [trace_fn]
           _ -> error "swap not supported"
+        where
+          trace_fn = AsExpr . AsLval $ fn_name
+          fn_name
+            | Ty.is_barred t = class_barred_trace_fn_name t
+            | otherwise = classTraceFnName t
+          t = A.getType first
 
   translate cat@(A.TryAssign{A.target = acc@A.FieldAccess{A.target, A.name},
                              A.arg}) = do

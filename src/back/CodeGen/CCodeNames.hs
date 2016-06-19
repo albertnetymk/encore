@@ -336,6 +336,10 @@ classTraceFnName :: Ty.Type -> CCode Name
 classTraceFnName clazz =
     Nam $ encoreName "trace" (Ty.getId clazz)
 
+class_barred_trace_fn_name :: Ty.Type -> CCode Name
+class_barred_trace_fn_name clazz =
+    Nam $ encoreName "barred_trace" (Ty.getId clazz)
+
 so_lockfree_subord_finalizer_name :: Ty.Type -> CCode Name
 so_lockfree_subord_finalizer_name clazz =
     Nam $ encoreName "so_lockfree_subord_finalizer" $ Ty.getId clazz

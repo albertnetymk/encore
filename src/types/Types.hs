@@ -224,6 +224,9 @@ data Type = Type
     ,restricted :: [RestrictedField]
     }
 
+is_barred :: Type -> Bool
+is_barred = not . null . barred
+
 unbox ty = ty{box = Nothing}
 
 unrestrict ty f =
@@ -412,7 +415,6 @@ showWithKind ty = kind (inner ty) ++ " " ++ show ty
     kind CType{}                       = "embedded type"
     kind TypeSynonym{}                 = "type synonym"
     kind _                             = "type"
-
 
 hasSameKind :: Type -> Type -> Bool
 hasSameKind ty1 ty2

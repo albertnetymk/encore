@@ -562,6 +562,7 @@ translatePassiveClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [so_lockfree_subord_finalizer cdecl ctable] ++
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
+    [barred_trace_fun_decl cdecl] ++
     [constructorImpl Passive cname ctable] ++
     methodImpls ++
     [dispatchfunDecl] ++
@@ -751,10 +752,38 @@ tracefunDecl A.Class{A.cname, A.cfields, A.cmethods} =
       --               else AsExpr $ Var "_this" `Arrow` fieldName fname
       --       fieldAssign = Assign (Decl (translate ftype, var)) field
       --   in Seq [fieldAssign, traceVariable ftype var]
-      skipping_list = [A.Spec, A.Once]
+      pred = [A.isSpecField, A.isOnceField]
 
-      traceField A.Field {A.fmods, A.ftype, A.fname}
-        | not . null $ fmods `intersect` skipping_list =
+      traceField f@A.Field {A.fmods, A.ftype, A.fname}
+        | or $ map (\p -> p f) pred =
+            Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
+        | otherwise =
+          let var = Var . show $ fieldName fname
+              field = Var "_this" `Arrow` fieldName fname
+              fieldAssign = Assign (Decl (translate ftype, var)) field
+          in Seq [fieldAssign, traceVariable ftype var]
+
+barred_trace_fun_decl :: A.ClassDecl -> CCode Toplevel
+barred_trace_fun_decl A.Class{A.cname, A.cfields, A.cmethods} =
+    case find ((== Ty.getId cname ++ "_trace") . show . A.methodName) cmethods of
+      Just mdecl@(A.Method{A.mbody}) ->
+          Function void (class_barred_trace_fn_name cname)
+                   [(Ptr encoreCtxT, encoreCtxVar), (Ptr void, Var "p")]
+                   (Statement $ Call (methodImplName cname (A.methodName mdecl))
+                                [encoreCtxVar, Var "p"])
+      Nothing ->
+          Function void (class_barred_trace_fn_name cname)
+                   [(Ptr encoreCtxT, encoreCtxVar),
+                   (Ptr void, Var "p")]
+                   (Seq $
+                    (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+                            (Var "p")) :
+                     map traceField cfields)
+    where
+      pred = [A.isSpecField, A.isOnceField, A.isValField]
+
+      traceField f@A.Field {A.fmods, A.ftype, A.fname}
+        | or $ map (\p -> p f) pred =
             Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
         | otherwise =
           let var = Var . show $ fieldName fname

@@ -84,6 +84,9 @@ typedef struct encore_passive_lf_so_t {
 #define _SO_LOCKFREE_CAS_TRY_WRAPPER(X, Y, Z, F) \
   _so_lockfree_cas_try_wrapper(_ctx, X, Y, Z, F)
 
+#define _SO_LOCKFREE_CAS_EXTRACT_WRAPPER(X, F) \
+  _so_lockfree_cas_extract_wrapper(&X, F)
+
 #define _SO_LOCKFREE_CAS_LINK_WRAPPER(X, Y, Z, F) \
   _so_lockfree_cas_link_wrapper(_ctx, X, Y, Z, F)
 
@@ -124,6 +127,7 @@ size_t so_lockfree_dec_rc(void *p);
 bool so_lockfree_is_published(void *p);
 bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F);
+void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F);
 bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F);
 bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,

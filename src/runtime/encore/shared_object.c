@@ -441,6 +441,18 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *_Z,
   return ret;
 }
 
+void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F)
+{
+  void **address = (void **)_address;
+  void *tmp = *(void **)address;
+  *address = NULL;
+  pony_ctx_t *ctx = pony_ctx();
+  pony_gc_recv(ctx);
+  pony_traceobject(ctx, tmp, F);
+  pony_recv_done(ctx);
+  return tmp;
+}
+
 bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F)
 {
