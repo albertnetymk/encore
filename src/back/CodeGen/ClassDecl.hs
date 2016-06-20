@@ -780,7 +780,7 @@ barred_trace_fun_decl A.Class{A.cname, A.cfields, A.cmethods} =
                             (Var "p")) :
                      map traceField cfields)
     where
-      pred = [A.isSpecField, A.isOnceField, A.isValField]
+      pred = [A.isSpecField, A.isOnceField, A.isVarField]
 
       traceField f@A.Field {A.fmods, A.ftype, A.fname}
         | or $ map (\p -> p f) pred =
