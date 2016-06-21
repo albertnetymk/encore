@@ -493,9 +493,6 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
 
     so_lockfree_recv(ctx);
 
-    // gc_recvobject_shallow(ctx, Y);
-    // gc_recvobject_shallow_done(ctx);
-
     gc_sendobject_shallow(ctx, Y);
     gc_sendobject_shallow_done(ctx);
 
@@ -507,17 +504,16 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
   return ret;
 }
 
+// TODO I can probably unite the two
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F)
 {
   so_lockfree_inc_rc(rhs);
-  if (so_lockfree_dec_rc(lhs) == 1) {
-    gc_recvobject_shallow(ctx, lhs);
-  };
+  so_lockfree_dec_rc(lhs);
 }
 
 void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs)
 {
-   so_lockfree_inc_rc(rhs);
-   so_lockfree_dec_rc(lhs);
+  so_lockfree_inc_rc(rhs);
+  so_lockfree_dec_rc(lhs);
 }
