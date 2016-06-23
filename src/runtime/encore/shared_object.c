@@ -220,8 +220,6 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   item->duration = current_d;
 }
 
-// delegate to exit_as_head and exit_as_not_head, need to wait for the new
-// duration if selected as the head candidate
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
@@ -235,10 +233,10 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
     current_d->head = item;
     _atomic_store(&current_d->closed, true);
     _atomic_store(&so_gc->current_d, new_headless_duration());
+    duration_spscq_push(&so_gc->duration_q, current_d);
     current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
     assert(current_aba % 2 == 1);
     (void) current_aba;
-    duration_spscq_push(&so_gc->duration_q, current_d);
   }
 
   _atomic_add(&current_d->exit, 1);
