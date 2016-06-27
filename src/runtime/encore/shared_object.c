@@ -433,6 +433,7 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *_Z,
     so_lockfree_send(ctx);
   } else {
     so_lockfree_dec_rc(Z);
+    assert(so_lockfree_is_published(Z) == false);
     so_lockfree_unsend(ctx);
   }
 
@@ -472,6 +473,7 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     so_lockfree_send(ctx);
   } else {
     so_lockfree_dec_rc(Z);
+    assert(so_lockfree_is_published(Z) == false);
     so_lockfree_unsend(ctx);
   }
 
@@ -482,6 +484,7 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F)
 {
   assert(X);
+  so_lockfree_inc_rc(Z);
   bool ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
     pony_gc_collect_to_recv(ctx);
@@ -494,9 +497,12 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     gc_sendobject_shallow(ctx, Y);
     gc_sendobject_shallow_done(ctx);
 
-    so_lockfree_inc_rc(Z);
     if (so_lockfree_dec_rc(Y) == 1) {
       so_lockfree_delay_recv_using_send(ctx, Y);
+    }
+  } else {
+    if (so_lockfree_dec_rc(Z) == 1) {
+      so_lockfree_delay_recv_using_send(ctx, Z);
     }
   }
   return ret;
