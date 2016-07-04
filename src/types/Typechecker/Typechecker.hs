@@ -251,7 +251,7 @@ instance Checkable ClassDecl where
   --  E |- class cname fields methods
   doTypecheck c@(Class {cname, cfields, cmethods, ccapability}) = do
     let traits = typesFromCapability ccapability
-    unless (isPassiveClassType cname || null traits) $
+    unless (isPassiveClassType cname || isSharedClassType cname || null traits) $
            tcError TraitsInActiveClassError
     mapM_ (meetRequiredFields cfields) traits
     mapM_ (meetRequiredMethods cmethods) traits
@@ -301,7 +301,7 @@ hasType e ty = local (pushBT e) $ checkHasType e ty
           do eExpr <- doTypecheck expr
              let exprType = AST.getType eExpr
              resultType <- exprType `coercedInto` ty
-             assertSubtypeOf resultType ty
+             resultType `assertCanFlowInto` ty
              let result = propagateResultType resultType eExpr
              return $ setType resultType result
 
@@ -806,14 +806,13 @@ instance Checkable Expr where
            eWitness <- typecheck witness
            targetType `assertSubtypeOf` AST.getType eWitness
            eArg <- typecheck arg
-           checkAssignmentRestrictions eTarget eArg
            let argType = AST.getType eArg
            if isPristineRefType argType
            then case witness of
-                  FieldAccess{name = g} -> (argType `unbar` g)
-                                           `assertSubtypeOf` targetType
-                  _ -> argType `assertSubtypeOf` targetType
-           else argType `assertSubtypeOf` targetType
+                  FieldAccess{name = g} -> (argType `unrestrict` g)
+                                           `assertCanFlowInto` targetType
+                  _ -> argType `assertCanFlowInto` targetType
+           else argType `assertCanFlowInto` targetType
            checkArgShape eWitness eArg
            if isRefType targetType
            then do
@@ -857,15 +856,15 @@ instance Checkable Expr where
           getBindings target@FieldAccess{}
                       VarAccess{name}
                       FieldAccess{target = argTarget, name = g} =
-                          return [(name, AST.getType target `bar` g)]
+                          return [(name, AST.getType target `tilde` g)]
           getBindings target@FieldAccess{}
                       VarAccess{name}
                       VarAccess{} = return [(name, AST.getType target)] -- TODO: Is this safe?
           getBindings _ _ _ = return []
 
           residualType targetType f = do
-            let strongRestricts = stronglyBarredFields targetType
-            fdecl <- findField (targetType `unbar` f) f
+            let strongRestricts = stronglyRestrictedFields targetType
+            fdecl <- findField (targetType `unrestrict` f) f
             unless (f `elem` strongRestricts) $
                    tcError $ ResidualAliasingError f targetType
             return $ ftype fdecl
@@ -877,12 +876,12 @@ instance Checkable Expr where
         do eTarget <- typecheck target
            checkTargetShape eTarget
            eArg <- typecheck arg
+           unless (isVarAccess eArg) $
+                  tcError MalformedTryAssignError
            let targetType = AST.getType eTarget
                argType = AST.getType eArg
-           argType `assertSubtypeOf` targetType
-           checkArgShape eArg
+           argType `assertCanFlowInto` targetType
            let bindings = getBindings eTarget
-           checkAssignmentRestrictions eTarget eArg
            return $ setEnvChange bindings $
                     setType boolType try{target = eTarget, arg = eArg}
         where
@@ -896,11 +895,8 @@ instance Checkable Expr where
               _ -> tcError $
                    SimpleError "First argument of try must be a field access"
 
-          checkArgShape VarAccess{} = return ()
-          checkArgShape _ = tcError MalformedTryAssignError
-
           getBindings FieldAccess{target = acc@VarAccess{name = x}, name = f} =
-              [(x, AST.getType acc `bar` f)]
+              [(x, AST.getType acc `tilde` f)]
     -- TODO
     -- -------------------------------
     --  E |- freeze(x.f, e1) : bool
@@ -923,7 +919,7 @@ instance Checkable Expr where
                          tcError $ NonSpecFreezeError fdecl
               _ -> pushError targ MalformedFreezeError
           getBindings acc@FieldAccess{target = var@VarAccess{name = x}, name = f} =
-              return [(x, AST.getType var `bar` f)]
+              return [(x, AST.getType var `tilde` f)]
           getBindings _ =
               error "Typechecker.hs: Target of freeze does not have correct shape"
 
@@ -950,7 +946,7 @@ instance Checkable Expr where
               _ -> pushError targ MalformedIsFrozenError
 
           getBindings FieldAccess{target = acc@VarAccess{name = x}, name = f} =
-              return [(x, AST.getType acc `bar` f)]
+              return [(x, AST.getType acc `tilde` f)]
           getBindings _ =
               error "Typechecker.hs: Target of isFrozen does not have correct shape"
 
@@ -1059,7 +1055,7 @@ instance Checkable Expr where
       eTarget <- typecheck target
       let targetType = AST.getType eTarget
       unless (isThisAccess target || isPassiveClassType targetType) $
-        tcError $ CannotReadFieldError target
+        tcError $ CannotReadFieldError eTarget
       fdecl <- findField targetType name
       safeOnce <- asks safeToReadOnce
       when (isOnceField fdecl) $
@@ -1092,27 +1088,27 @@ instance Checkable Expr where
         if isPristineRefType targetType && isVarAccess target
         then do
           eRhs <- typecheck rhs
-          checkAssignmentRestrictions eLhs eRhs
           let lhsType = AST.getType eLhs
               rhsType = AST.getType eRhs
-          isDowncast <- liftM (lhsType /= rhsType &&) $
-                              lhsType `subtypeOf` rhsType
-          isDowncast <- rhsType `subtypeOf` lhsType
+          rhsType `assertSubtypeOf` lhsType
+          leftFlowsToRight <- lhsType `canFlowInto` rhsType
           fdecl <- findField targetType f
-          if isDowncast && not (isVarField fdecl)
+          let isTentative = (isSpecField fdecl || isValField fdecl) &&
+                            null (stronglyRestrictedFields rhsType) &&
+                            leftFlowsToRight && lhsType /= rhsType
+          if isTentative
           then do
-            let bindings = [(name target, targetType `bar` f)]
+            let bindings = [(name target, targetType `tilde` f)]
             return $ setEnvChange bindings $
                      setType voidType assign {lhs = eLhs, rhs = eRhs}
           else do
-            rhsType `assertSubtypeOf` lhsType
+            rhsType `assertCanFlowInto` lhsType
             return $ setType voidType assign {lhs = eLhs, rhs = eRhs}
         else do
           inConstr <- inConstructor
           unless (inConstr && isThisAccess target) $
                  assertAssignable eLhs
           eRhs <- hasType rhs (AST.getType eLhs)
-          checkAssignmentRestrictions eLhs eRhs
           return $ setType voidType assign {lhs = eLhs, rhs = eRhs}
         where
           inConstructor = do
@@ -1200,8 +1196,8 @@ instance Checkable Expr where
     --  E |- new ty(args) : ty
     doTypecheck new@(NewWithInit {ty, args}) = do
       ty' <- resolveType ty
-      isLinear <- isLinearType ty'
-      let ty'' = if isLinear
+      isSpine <- isSpineType ty'
+      let ty'' = if isSpine
                  then makePristine ty'
                  else ty'
       unless (isClassType ty'' && not (isMainType ty'')) $
@@ -1658,19 +1654,3 @@ matchTypes expected ty
       assertMatch expected ty = do
         ty `assertSubtypeOf` expected
         asks bindings
-
-assertSubtypeOf :: Type -> Type -> TypecheckM ()
-assertSubtypeOf sub super =
-    unlessM (sub `subtypeOf` super) $ do
-      capability <- if isClassType sub
-                    then do
-                      cap <- asks $ capabilityLookup sub
-                      if maybe False (not . isIncapability) cap
-                      then return cap
-                      else return Nothing
-                    else return Nothing
-      case capability of
-        Just cap ->
-            tcError $ TypeWithCapabilityMismatchError sub cap super
-        Nothing ->
-            tcError $ TypeMismatchError sub super
