@@ -348,7 +348,6 @@ void so_lockfree_send(pony_ctx_t *ctx)
   void *p;
   while(ctx->lf_tmp_stack != NULL) {
     ctx->lf_tmp_stack = gcstack_pop(ctx->lf_tmp_stack, &p);
-    so_lockfree_publish(p);
     gc_sendobject_shallow(ctx, p);
   }
   gc_sendobject_shallow_done(ctx);
@@ -430,6 +429,7 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *_Z,
   ret = _atomic_cas((void**)X, &Y, _Z);
   if (ret) {
     assert(Y == NULL);
+    so_lockfree_publish(Z);
     so_lockfree_send(ctx);
   } else {
     so_lockfree_dec_rc(Z);
@@ -470,6 +470,7 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     if (so_lockfree_dec_rc(Y) == 1) {
       so_lockfree_delay_recv_using_send(ctx, Y);
     }
+    so_lockfree_publish(Z);
     so_lockfree_send(ctx);
   } else {
     so_lockfree_dec_rc(Z);
