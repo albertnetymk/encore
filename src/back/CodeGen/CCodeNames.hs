@@ -358,7 +358,7 @@ class_inverse_trace_fn_name clazz =
 
 class_inverse_field_trace_fn_name :: Ty.Type -> ID.Name -> CCode Name
 class_inverse_field_trace_fn_name clazz field =
-    Nam $ encoreName ("inverse_" ++ show field ++ "_trace") $ Ty.getId clazz
+    Nam $ encoreName ("inverse_trace") $ (Ty.getId clazz) ++ (show field)
 
 runtimeTypeInitFnName :: Ty.Type -> CCode Name
 runtimeTypeInitFnName clazz =

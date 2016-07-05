@@ -67,6 +67,7 @@ module Types(
             ,resolvedFrom
             ,unbox
             ,unrestrict
+            ,is_restricted
             ,bar
             ,doubleBar
             ,tilde
@@ -224,8 +225,8 @@ data Type = Type
     ,restricted :: [RestrictedField]
     }
 
-is_barred :: Type -> Bool
-is_barred = not . null . barred
+is_restricted :: Type -> Bool
+is_restricted = not . null . restricted
 
 unbox ty = ty{box = Nothing}
 

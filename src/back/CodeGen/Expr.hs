@@ -1095,7 +1095,7 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
         where
           trace_fn = AsExpr . AsLval $ fn_name
           fn_name
-            | Ty.is_barred t = class_barred_trace_fn_name t
+            | Ty.is_restricted t = class_barred_trace_fn_name t
             | otherwise = classTraceFnName t
           t = A.getType first
 

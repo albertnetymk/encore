@@ -141,6 +141,7 @@ static void collect(encore_so_t *this)
       }
       clean_one(d->head);
       duration_t *_d = duration_spscq_pop(&so_gc->duration_q);
+      (void)_d;
       assert(d == _d);
     }
     if (so_gc->pending_lock.pending > 0) {
