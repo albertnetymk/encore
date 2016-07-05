@@ -74,9 +74,15 @@ typedef struct encore_so_t
 
 typedef struct encore_passive_lf_so_t {
   pony_type_t *t;
+  struct encore_passive_lf_so_t *prev;
+  struct encore_passive_lf_so_t *next;
   size_t rc;
   bool published;
 } encore_passive_lf_so_t;
+
+typedef struct so_lockfree_padding {
+    char data[sizeof(encore_passive_lf_so_t) - sizeof(void*)];
+} so_lockfree_padding;
 
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
 #define UNFREEZE(field) ((void*)(((uintptr_t)field) & ~1UL))

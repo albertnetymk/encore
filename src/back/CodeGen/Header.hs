@@ -227,8 +227,7 @@ generateHeader p =
          lf_so_rc c
            | any Ty.isSpineRefType $ Ty.typesFromCapability $ A.ccapability c
              = [
-               (Typ "size_t", Var "_enc__lf_so_rc"),
-               (Typ "bool", Var "_enc__lf_so_published")
+               (Typ "so_lockfree_padding", Var "_enc__lf_so_data")
                ]
            | otherwise = []
 
