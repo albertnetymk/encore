@@ -662,6 +662,8 @@ class_subord_fields_apply A.Class{A.cname, A.cfields} ctable =
   where
     black_list = [A.Spec, A.Once]
 
+    void_this = Cast (Ptr void) $ Var "_this"
+
     traceField A.Field {A.fmods, A.ftype, A.fname}
       | is_subord ftype ctable =
           let var = Var . show $ fieldName fname
@@ -673,7 +675,9 @@ class_subord_fields_apply A.Class{A.cname, A.cfields} ctable =
                 else
                   "so_lockfree_spec_subord_field_apply"
           in Seq [ fieldAssign
-                 , Statement $ Call (Nam apply_fun_name) [encoreCtxVar, field]]
+                 , Statement $ Call (Nam apply_fun_name)
+                     [AsExpr encoreCtxVar, void_this, AsExpr field]
+                 ]
       | otherwise =
           Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
 

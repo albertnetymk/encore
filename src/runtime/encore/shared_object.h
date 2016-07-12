@@ -44,12 +44,30 @@ typedef struct {
 
 typedef void (*so_lockfree_final_cb_fn) (pony_ctx_t *ctx, void *p);
 
+typedef struct encore_passive_lf_so_t {
+  pony_type_t *t;
+  struct encore_passive_lf_so_t *prev;
+  struct encore_passive_lf_so_t *next;
+  size_t rc;
+  bool published;
+} encore_passive_lf_so_t;
+
+typedef struct so_lockfree_padding {
+  char data[sizeof(encore_passive_lf_so_t) - sizeof(void*)];
+} so_lockfree_padding;
+
+typedef struct so_subord_mpscq_t {
+  encore_passive_lf_so_t *head;
+  encore_passive_lf_so_t *tail;
+} so_subord_mpscq_t;
+
 typedef struct so_gc_t {
   so_lockfree_final_cb_fn final_cb;
   aba_entry_t aba_entry;
   duration_t *current_d;
   duration_spscq_t duration_q;
   pending_lock_t pending_lock;
+  so_subord_mpscq_t so_subord_mpscq;
 } so_gc_t;
 
 typedef struct encore_so_t
@@ -72,29 +90,17 @@ typedef struct encore_so_t
   so_gc_t so_gc;
 } encore_so_t;
 
-typedef struct encore_passive_lf_so_t {
-  pony_type_t *t;
-  struct encore_passive_lf_so_t *prev;
-  struct encore_passive_lf_so_t *next;
-  size_t rc;
-  bool published;
-} encore_passive_lf_so_t;
-
-typedef struct so_lockfree_padding {
-    char data[sizeof(encore_passive_lf_so_t) - sizeof(void*)];
-} so_lockfree_padding;
-
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
 #define UNFREEZE(field) ((void*)(((uintptr_t)field) & ~1UL))
 
 #define _SO_LOCKFREE_CAS_TRY_WRAPPER(X, Y, Z, F) \
-  _so_lockfree_cas_try_wrapper(_ctx, X, Y, Z, F)
+  _so_lockfree_cas_try_wrapper(_ctx, (void*)_this, X, Y, Z, F)
 
 #define _SO_LOCKFREE_CAS_EXTRACT_WRAPPER(X, F) \
   _so_lockfree_cas_extract_wrapper(&X, F)
 
 #define _SO_LOCKFREE_CAS_LINK_WRAPPER(X, Y, Z, F) \
-  _so_lockfree_cas_link_wrapper(_ctx, X, Y, Z, F)
+  _so_lockfree_cas_link_wrapper(_ctx, (void*)_this, X, Y, Z, F)
 
 #define _SO_LOCKFREE_CAS_UNLINK_WRAPPER(X, Y, Z, F) \
   _so_lockfree_cas_unlink_wrapper(_ctx, X, Y, Z, F)
@@ -109,8 +115,10 @@ typedef struct to_trace_t to_trace_t;
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type);
 void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb);
-void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, void *p);
-void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, void *p);
+void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
+    void *p);
+void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
+    void *p);
 void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx);
 void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p);
 to_trace_t *so_to_trace_new(encore_so_t *this);
@@ -123,19 +131,17 @@ void pony_gc_collect_to_recv(pony_ctx_t* ctx);
 void pony_gc_collect_to_recv_done(pony_ctx_t *ctx);
 void so_lockfree_send(pony_ctx_t *ctx);
 void so_lockfree_unsend(pony_ctx_t *ctx);
-void so_lockfree_recv(pony_ctx_t *ctx);
-void so_lockfree_delay_recv_using_send(pony_ctx_t *ctx, void *p);
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item);
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);
 void so_lockfree_chain_final(pony_ctx_t *ctx, void *p);
 size_t so_lockfree_inc_rc(void *p);
 size_t so_lockfree_dec_rc(void *p);
 bool so_lockfree_is_published(void *p);
-bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
-    pony_trace_fn F);
+bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
+    void *X, void *Y, void *_Z, pony_trace_fn F);
 void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F);
-bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
-    pony_trace_fn F);
+bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
+    void *X, void *Y, void *_Z, pony_trace_fn F);
 bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F);
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,

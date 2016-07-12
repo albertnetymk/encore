@@ -93,7 +93,110 @@ static duration_t* duration_spscq_peek(duration_spscq_t *q)
   return tail->next;
 }
 
-static void clean_one(to_trace_t *item)
+static void so_subord_mpscq_init(so_subord_mpscq_t *q)
+{
+  encore_passive_lf_so_t *dummy = POOL_ALLOC(encore_passive_lf_so_t);
+  dummy->published = false;
+  q->head = q->tail = dummy;
+}
+
+static void so_subord_mpscq_destroy(so_subord_mpscq_t *q)
+{
+  assert(q->tail = q->head);
+  POOL_FREE(encore_passive_lf_so_t, q->tail);
+}
+
+static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
+{
+  encore_passive_lf_so_t *delimiter = POOL_ALLOC(encore_passive_lf_so_t);
+  delimiter->published = false;
+
+  encore_passive_lf_so_t* prev =
+    (encore_passive_lf_so_t*)_atomic_exchange(&q->head, delimiter);
+  _atomic_store(&delimiter->prev, prev);
+  _atomic_store(&prev->next, delimiter);
+}
+
+static void so_subord_mpscq_push(so_subord_mpscq_t *q,
+    encore_passive_lf_so_t *d)
+{
+  encore_passive_lf_so_t* prev =
+    (encore_passive_lf_so_t*)_atomic_exchange(&q->head, d);
+  _atomic_store(&d->prev, prev);
+  _atomic_store(&prev->next, d);
+}
+
+static void so_subord_remove_tail(so_subord_mpscq_t *q)
+{
+  encore_passive_lf_so_t *tail = q->tail;
+  encore_passive_lf_so_t *next = tail->next;
+  assert(!tail->published);
+  POOL_FREE(encore_passive_lf_so_t, tail);
+  q->tail = next;
+}
+
+static encore_passive_lf_so_t* so_subord_mpscq_peak(so_subord_mpscq_t *q)
+{
+  assert(q->tail);
+  assert(q->tail != q->head);
+  return q->tail->next;
+}
+
+static void sweep_all_delimiters(so_subord_mpscq_t *q)
+{
+  if (q->tail == q->head) {
+    return;
+  }
+  encore_passive_lf_so_t *cur = q->tail->next;
+  encore_passive_lf_so_t *tmp;
+  while (cur != q->head) {
+    if (!cur->published) {
+      tmp = cur;
+      cur = cur->next;
+      POOL_FREE(encore_passive_lf_so_t, tmp);
+    } else {
+      cur = cur->next;
+    }
+  }
+}
+
+static void free_prefix_delimiters(so_subord_mpscq_t *q)
+{
+  encore_passive_lf_so_t *first = so_subord_mpscq_peak(q);
+  assert(first);
+  do {
+    if (first->published) {
+      return;
+    }
+    so_subord_remove_tail(q);
+    first = so_subord_mpscq_peak(q);
+  } while (first);
+}
+
+static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
+    encore_passive_lf_so_t *d)
+{
+  if (!d->next) {
+    so_subord_mpscq_push_delimiter(q);
+  }
+  assert(d->prev);
+  assert(d->next);
+  d->prev->next = d->next;
+  d->next->prev = d->prev;
+}
+
+static void so_lockfree_heap_push(so_gc_t *so_gc, encore_passive_lf_so_t *f)
+{
+  assert(f->published);
+  so_subord_mpscq_push(&so_gc->so_subord_mpscq, f);
+}
+
+static void so_lockfree_heap_remove(so_gc_t *so_gc, encore_passive_lf_so_t *f)
+{
+  so_subord_mpscq_remove(&so_gc->so_subord_mpscq, f);
+}
+
+static void clean_one(encore_so_t *this, to_trace_t *item)
 {
   assert(item);
   encore_passive_lf_so_t *f;
@@ -108,7 +211,9 @@ static void clean_one(to_trace_t *item)
       f = cur->address;
       assert(f->published);
       if (_atomic_load(&f->rc) == 0) {
-        gc_recvobject_shallow(ctx, cur->address);
+        free_prefix_delimiters(&this->so_gc.so_subord_mpscq);
+        so_lockfree_heap_remove(&this->so_gc, f);
+        gc_recvobject_shallow(ctx, f);
       }
       pre = cur;
       cur = cur->next;
@@ -139,7 +244,7 @@ static void collect(encore_so_t *this)
       if (!_atomic_load(&d->collectible)) {
         break;
       }
-      clean_one(d->head);
+      clean_one(this, d->head);
       duration_t *_d = duration_spscq_pop(&so_gc->duration_q);
       (void)_d;
       assert(d == _d);
@@ -251,6 +356,7 @@ encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
   this->so_gc.current_d = new_headless_duration();
   this->so_gc.pending_lock.dw = 0;
   duration_spscq_init(&this->so_gc.duration_q);
+  so_subord_mpscq_init(&this->so_gc.so_subord_mpscq);
   return this;
 }
 
@@ -281,32 +387,42 @@ void encore_so_finalinzer(void *p)
 {
   assert(p);
   encore_so_t *this = p;
+  sweep_all_delimiters(&this->so_gc.so_subord_mpscq);
   assert(this->so_gc.final_cb);
   this->so_gc.final_cb(pony_ctx(), this);
   assert(duration_spscq_peek(&this->so_gc.duration_q) == NULL);
   duration_spscq_destroy(&this->so_gc.duration_q);
+  so_subord_mpscq_destroy(&this->so_gc.so_subord_mpscq);
 }
 
-static void so_lockfree_publish(void *p)
+static void so_lockfree_publish(encore_so_t *this, void *p)
 {
   assert(p);
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   if (!f->published) {
     f->published = true;
+    so_lockfree_heap_push(&this->so_gc, f);
   }
 }
 
-void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, void *p)
+static void so_lockfree_delay_recv(pony_ctx_t *ctx, void *p)
+{
+  ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
+}
+
+void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
+    void *p)
 {
   if (!p) { return; }
-  so_lockfree_publish(p);
+  so_lockfree_publish(this, p);
   gc_sendobject_shallow(ctx, p);
 }
 
-void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, void *p)
+void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
+    void *p)
 {
   if (!p) { return; }
-  so_lockfree_publish(p);
+  so_lockfree_publish(this, p);
   gc_sendobject_shallow(ctx, p);
   so_lockfree_inc_rc(p);
 }
@@ -362,7 +478,7 @@ void so_lockfree_unsend(pony_ctx_t *ctx)
   }
 }
 
-void so_lockfree_recv(pony_ctx_t *ctx)
+static void so_lockfree_recv(pony_ctx_t *ctx)
 {
   void *p;
   while(ctx->lf_tmp_stack != NULL) {
@@ -370,11 +486,6 @@ void so_lockfree_recv(pony_ctx_t *ctx)
     gc_recvobject_shallow(ctx, p);
   }
   gc_recvobject_shallow_done(ctx);
-}
-
-void so_lockfree_delay_recv_using_send(pony_ctx_t *ctx, void *p)
-{
-  ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
 }
 
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item)
@@ -413,8 +524,8 @@ size_t so_lockfree_dec_rc(void *p)
   return _atomic_sub(&f->rc, 1);
 }
 
-bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *_Z,
-    pony_trace_fn F)
+bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
+    void *X, void *Y, void *_Z, pony_trace_fn F)
 {
   assert(X);
   bool ret;
@@ -430,7 +541,7 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *_Z,
   ret = _atomic_cas((void**)X, &Y, _Z);
   if (ret) {
     assert(Y == NULL);
-    so_lockfree_publish(Z);
+    so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
   } else {
     so_lockfree_dec_rc(Z);
@@ -453,8 +564,8 @@ void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F)
   return tmp;
 }
 
-bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
-    pony_trace_fn F)
+bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
+    void *X, void *Y, void *Z, pony_trace_fn F)
 {
   assert(X);
   bool ret;
@@ -469,9 +580,9 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
     if (so_lockfree_dec_rc(Y) == 1) {
-      so_lockfree_delay_recv_using_send(ctx, Y);
+      so_lockfree_delay_recv(ctx, Y);
     }
-    so_lockfree_publish(Z);
+    so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
   } else {
     so_lockfree_dec_rc(Z);
@@ -500,11 +611,11 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     gc_sendobject_shallow_done(ctx);
 
     if (so_lockfree_dec_rc(Y) == 1) {
-      so_lockfree_delay_recv_using_send(ctx, Y);
+      so_lockfree_delay_recv(ctx, Y);
     }
   } else {
     if (so_lockfree_dec_rc(Z) == 1) {
-      so_lockfree_delay_recv_using_send(ctx, Z);
+      so_lockfree_delay_recv(ctx, Z);
     }
   }
   return ret;
