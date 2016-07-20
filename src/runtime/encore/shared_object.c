@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <stdint.h>
 
+// #define use_stw_mark_sweep
+
+#define void_assert(e) { (void)(e) ; assert(e); }
+
 #define _atomic_sub(PTR, VAL) \
   (__atomic_fetch_sub(PTR, VAL, __ATOMIC_RELEASE))
 
@@ -37,6 +41,7 @@ typedef struct duration_t {
   uint32_t exit;
   bool collectible;
   bool closed;
+  bool stw;
   struct duration_t *next;
 } duration_t;
 
@@ -102,13 +107,13 @@ static void so_subord_mpscq_init(so_subord_mpscq_t *q)
 
 static void so_subord_mpscq_destroy(so_subord_mpscq_t *q)
 {
-  assert(q->tail = q->head);
   POOL_FREE(encore_passive_lf_so_t, q->tail);
 }
 
 static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
 {
   encore_passive_lf_so_t *delimiter = POOL_ALLOC(encore_passive_lf_so_t);
+  delimiter->next = NULL;
   delimiter->published = false;
 
   encore_passive_lf_so_t* prev =
@@ -120,6 +125,7 @@ static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
 static void so_subord_mpscq_push(so_subord_mpscq_t *q,
     encore_passive_lf_so_t *d)
 {
+  assert(d->next == NULL);
   encore_passive_lf_so_t* prev =
     (encore_passive_lf_so_t*)_atomic_exchange(&q->head, d);
   _atomic_store(&d->prev, prev);
@@ -138,7 +144,10 @@ static void so_subord_remove_tail(so_subord_mpscq_t *q)
 static encore_passive_lf_so_t* so_subord_mpscq_peak(so_subord_mpscq_t *q)
 {
   assert(q->tail);
-  assert(q->tail != q->head);
+  if (q->tail == q->head) {
+    return NULL;
+  }
+  assert(q->tail->next);
   return q->tail->next;
 }
 
@@ -187,13 +196,60 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
 
 static void so_lockfree_heap_push(so_gc_t *so_gc, encore_passive_lf_so_t *f)
 {
-  assert(f->published);
+  assert(f->published == true);
   so_subord_mpscq_push(&so_gc->so_subord_mpscq, f);
 }
 
 static void so_lockfree_heap_remove(so_gc_t *so_gc, encore_passive_lf_so_t *f)
 {
   so_subord_mpscq_remove(&so_gc->so_subord_mpscq, f);
+}
+
+extern void pony_so_lockfree_mark(pony_ctx_t* ctx);
+
+void so_lockfree_markobject(pony_ctx_t *ctx, encore_passive_lf_so_t *p,
+    pony_trace_fn f)
+{
+  if (!p) { return; }
+  p = UNFREEZE(p);
+  assert(p->published);
+  if (p->gc_mark == ctx->so_lockfree_gc_mark) {
+    return;
+  }
+  p->gc_mark = ctx->so_lockfree_gc_mark;
+  if (f) {
+    ctx->stack = gcstack_push(ctx->stack, p);
+    ctx->stack = gcstack_push(ctx->stack, f);
+  }
+}
+
+static void mark_sweep(encore_so_t *this)
+{
+  this->gc_mark++;
+  pony_ctx_t *ctx = pony_ctx();
+  ctx->so_lockfree_gc_mark = this->gc_mark;
+  pony_so_lockfree_mark(ctx);
+  this->subord_trace(ctx, this);
+  gc_handlestack(ctx);
+
+  so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
+  encore_passive_lf_so_t *prev;
+  assert(q->tail);
+  encore_passive_lf_so_t *cur = q->tail->next;
+  while (cur) {
+    if (!cur->published || cur->gc_mark == this->gc_mark) {
+      cur = cur->next;
+      continue;
+    }
+    // assert(0);
+    prev = cur->prev;
+    so_subord_mpscq_remove(q, cur);
+    // TODO need to check if there's pending recv...
+    // gc_recvobject_shallow(ctx, tmp);
+    cur = prev->next;
+    // TODO I think the elem in tmp has been consumed; need to rethink this on
+    // supporting swap
+  }
 }
 
 static void clean_one(encore_so_t *this, to_trace_t *item)
@@ -228,30 +284,33 @@ static void collect(encore_so_t *this)
 {
   // multithread
   so_gc_t *so_gc = &this->so_gc;
-  if (_atomic_add(&so_gc->pending_lock.pending, 1) != 0) {
-    return;
-  }
+  if (_atomic_add(&so_gc->pending_lock.pending, 1) != 0) { return; }
   uint32_t lock = 0;
-  if (!_atomic_cas(&so_gc->pending_lock.lock, &lock, 1)) {
-    return;
-  }
+  if (!_atomic_cas(&so_gc->pending_lock.lock, &lock, 1)) { return; }
   duration_t *d;
   pending_lock_t pending_lock = (pending_lock_t) {.lock = 1};
   pending_lock_t new_pending_lock = (pending_lock_t) {};
+  if (_atomic_load(&so_gc->pending_lock.pending) == 0
+      && _atomic_cas(&so_gc->pending_lock.dw, &pending_lock.dw,
+        new_pending_lock.dw)) {
+    return;
+  }
   do {
+    assert(_atomic_load(&so_gc->pending_lock.pending) > 0);
     _atomic_sub(&so_gc->pending_lock.pending, 1);
     while ((d = duration_spscq_peek(&so_gc->duration_q))) {
-      if (!_atomic_load(&d->collectible)) {
-        break;
-      }
+      if (!_atomic_load(&d->collectible)) { break; }
       clean_one(this, d->head);
       duration_t *_d = duration_spscq_pop(&so_gc->duration_q);
-      (void)_d;
-      assert(d == _d);
+      void_assert(d == _d);
+      if (d->stw) {
+        void_assert(mark_sweep);
+        mark_sweep(this);
+        uint32_t current_aba = _atomic_add(&this->so_gc.aba_entry.aba, 1);
+        void_assert(current_aba % 2 == 1);
+      }
     }
-    if (so_gc->pending_lock.pending > 0) {
-      continue;
-    }
+    if (so_gc->pending_lock.pending > 0) { continue; }
     pending_lock.pending = 0;
     if (_atomic_cas(&so_gc->pending_lock.dw, &pending_lock.dw,
           new_pending_lock.dw)) {
@@ -269,7 +328,7 @@ static void set_collectible(encore_so_t *this, duration_t *d)
 
   if (_atomic_load(&d->exit) == _atomic_load(&d->entry)) {
     _atomic_store(&d->collectible, true);
-        collect(this);
+    collect(this);
   }
 }
 
@@ -281,6 +340,7 @@ static duration_t *new_headless_duration()
   new->exit = 0;
   new->collectible = false;
   new->closed = true;
+  new->stw = false;
   new->next = NULL;
   return new;
 }
@@ -334,15 +394,18 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
   assert(current_d);
   if (_atomic_cas(&so_gc->current_d, &old_current_d, NULL)) {
     uint32_t current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
-    assert(current_aba % 2 == 0);
+    void_assert(current_aba % 2 == 0);
     current_d->entry = _atomic_exchange(&so_gc->aba_entry.entry, 0);
     current_d->head = item;
     _atomic_store(&current_d->closed, true);
     _atomic_store(&so_gc->current_d, new_headless_duration());
     duration_spscq_push(&so_gc->duration_q, current_d);
-    current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
-    assert(current_aba % 2 == 1);
-    (void) current_aba;
+#ifdef use_stw_mark_sweep
+      current_d->stw = true;
+#else
+      current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
+      void_assert(current_aba % 2 == 1);
+#endif
   }
 
   _atomic_add(&current_d->exit, 1);
@@ -366,6 +429,12 @@ void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb)
   this->so_gc.final_cb = final_cb;
 }
 
+void so_lockfree_register_subord_trace_fn(void *p, pony_trace_fn trace)
+{
+  encore_so_t *this = p;
+  this->subord_trace = trace;
+}
+
 to_trace_t *so_to_trace_new(encore_so_t *this)
 {
   to_trace_t *item = POOL_ALLOC(to_trace_t);
@@ -383,13 +452,14 @@ void so_to_trace(to_trace_t *item, void *p)
   item->address = new;
 }
 
-void encore_so_finalinzer(void *p)
+void encore_so_finalizer(void *p)
 {
   assert(p);
   encore_so_t *this = p;
   sweep_all_delimiters(&this->so_gc.so_subord_mpscq);
   assert(this->so_gc.final_cb);
-  this->so_gc.final_cb(pony_ctx(), this);
+  pony_ctx_t *ctx = pony_ctx();
+  this->so_gc.final_cb(ctx, this);
   assert(duration_spscq_peek(&this->so_gc.duration_q) == NULL);
   duration_spscq_destroy(&this->so_gc.duration_q);
   so_subord_mpscq_destroy(&this->so_gc.so_subord_mpscq);
@@ -432,31 +502,43 @@ void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx)
   gc_sendobject_shallow_done(ctx);
 }
 
-void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p)
+void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
+    pony_trace_fn fn)
 {
   if (!p) { return; }
+  assert(p == UNFREEZE(p));
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  assert(f->published);
-  assert(_atomic_load(&f->rc) != 0);
-  if (_atomic_sub(&f->rc, 1) == 1) {
-    gc_recvobject_shallow(ctx, f);
+  assert(f->published == true);
+  size_t rc = _atomic_sub(&f->rc, 1);
+  assert(rc > 0);
+  if (rc == 1) {
+    pony_gc_recv(ctx);
+    pony_traceobject(ctx, f, fn);
+    pony_recv_done(ctx);
   }
 }
+
+// TODO do we need non_subord_field_final_apply??
 
 bool so_lockfree_is_published(void *p)
 {
   assert(p);
+  assert(p == UNFREEZE(p));
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   return f->published;
 }
 
-void so_lockfree_chain_final(pony_ctx_t *ctx, void *p)
+void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, pony_trace_fn fn)
 {
   if (!p) { return; }
-  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  assert(_atomic_load(&f->rc) != 0);
-  if (_atomic_sub(&f->rc, 1) == 1) {
-    gc_recvobject_shallow(ctx, f);
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)UNFREEZE(p);
+  assert(f->published == true);
+  size_t rc = _atomic_sub(&f->rc, 1);
+  assert(rc > 0);
+  if (rc == 1) {
+    pony_gc_recv(ctx);
+    pony_traceobject(ctx, f, fn);
+    pony_recv_done(ctx);
   }
 }
 

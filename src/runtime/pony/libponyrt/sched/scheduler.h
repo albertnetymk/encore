@@ -27,6 +27,7 @@ typedef struct pony_ctx_t
   gcstack_t* lf_tmp_stack;
   void* boundary;
   bool finalising;
+  uint32_t so_lockfree_gc_mark;
 
 #ifdef USE_TELEMETRY
   size_t tsc;

@@ -535,6 +535,10 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
                   [ AsExpr this
                   , Cast (Ptr void) $ class_subord_fields_final_apply_name ty
                   ]
+              , Call (Nam "so_lockfree_register_subord_trace_fn")
+                  [ AsExpr this
+                  , Cast (Ptr void) $ class_subord_trace_fn_name ty
+                  ]
               ]
         | otherwise = Skip
 

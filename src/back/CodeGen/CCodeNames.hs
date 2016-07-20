@@ -323,7 +323,7 @@ refTypeId ty =
 
 traitMethodSelectorName = Nam "trait_method_selector"
 
-encore_so_finalizer = Nam "encore_so_finalinzer"
+encore_so_finalizer = Nam "encore_so_finalizer"
 
 -- | each class, in C, provides a dispatch function that dispatches
 -- messages to the right method calls. This is the name of that
@@ -339,6 +339,10 @@ classTraceFnName clazz =
 class_barred_trace_fn_name :: Ty.Type -> CCode Name
 class_barred_trace_fn_name clazz =
     Nam $ encoreName "barred_trace" (Ty.getId clazz)
+
+class_subord_trace_fn_name :: Ty.Type -> CCode Name
+class_subord_trace_fn_name clazz =
+    Nam $ encoreName "subord_trace" (Ty.getId clazz)
 
 so_lockfree_subord_finalizer_name :: Ty.Type -> CCode Name
 so_lockfree_subord_finalizer_name clazz =

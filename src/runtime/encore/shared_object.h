@@ -49,6 +49,7 @@ typedef struct encore_passive_lf_so_t {
   struct encore_passive_lf_so_t *prev;
   struct encore_passive_lf_so_t *next;
   size_t rc;
+  uint32_t gc_mark;
   bool published;
 } encore_passive_lf_so_t;
 
@@ -88,6 +89,8 @@ typedef struct encore_so_t
 #endif
   pony_type_t *_enc__self_type;
   so_gc_t so_gc;
+  pony_trace_fn subord_trace;
+  uint32_t gc_mark;
 } encore_so_t;
 
 #define FREEZE(field) ((void*)(((uintptr_t)field) | 1UL))
@@ -115,16 +118,18 @@ typedef struct to_trace_t to_trace_t;
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type);
 void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb);
+void so_lockfree_register_subord_trace_fn(void *p, pony_trace_fn trace);
 void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
     void *p);
 void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
     void *p);
 void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx);
-void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p);
+void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
+    pony_trace_fn fn);
 to_trace_t *so_to_trace_new(encore_so_t *this);
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item);
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item);
-void encore_so_finalinzer(void *p);
+void encore_so_finalizer(void *p);
 void pony_gc_collect_to_send(pony_ctx_t* ctx);
 void pony_gc_collect_to_send_done(pony_ctx_t *ctx);
 void pony_gc_collect_to_recv(pony_ctx_t* ctx);
@@ -133,7 +138,7 @@ void so_lockfree_send(pony_ctx_t *ctx);
 void so_lockfree_unsend(pony_ctx_t *ctx);
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item);
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);
-void so_lockfree_chain_final(pony_ctx_t *ctx, void *p);
+void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, pony_trace_fn fn);
 size_t so_lockfree_inc_rc(void *p);
 size_t so_lockfree_dec_rc(void *p);
 bool so_lockfree_is_published(void *p);

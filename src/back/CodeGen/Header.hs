@@ -80,6 +80,9 @@ generateHeader p =
     [commentSection "Trace functions"] ++
     traceFnDecls ++
 
+    [commentSection "Subord trace functions"] ++
+    subord_trace_fn_decls ++
+
     [commentSection "Barred trace functions"] ++
     barred_trace_fn_decls ++
 
@@ -171,6 +174,12 @@ generateHeader p =
          where
            traceFnDecl A.Class{A.cname} =
                FunctionDecl void (classTraceFnName cname) [Ptr encoreCtxT,Ptr void]
+
+     subord_trace_fn_decls = map fn allclasses
+       where
+         fn A.Class{A.cname} =
+           FunctionDecl void (class_subord_trace_fn_name cname)
+             [Ptr encoreCtxT, Ptr void]
 
      barred_trace_fn_decls = map fn allclasses
        where
