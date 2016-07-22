@@ -44,22 +44,28 @@ typedef struct {
 
 typedef void (*so_lockfree_final_cb_fn) (pony_ctx_t *ctx, void *p);
 
+typedef struct so_lockfree_subord_wrapper_t so_lockfree_subord_wrapper_t;
+
 typedef struct encore_passive_lf_so_t {
   pony_type_t *t;
-  struct encore_passive_lf_so_t *prev;
-  struct encore_passive_lf_so_t *next;
   size_t rc;
-  uint32_t gc_mark;
-  bool published;
+  so_lockfree_subord_wrapper_t *wrapper;
 } encore_passive_lf_so_t;
+
+typedef struct so_lockfree_subord_wrapper_t {
+  struct so_lockfree_subord_wrapper_t *prev;
+  struct so_lockfree_subord_wrapper_t *next;
+  encore_passive_lf_so_t* p;
+  uint32_t gc_mark;
+} so_lockfree_subord_wrapper_t;
 
 typedef struct so_lockfree_padding {
   char data[sizeof(encore_passive_lf_so_t) - sizeof(void*)];
 } so_lockfree_padding;
 
 typedef struct so_subord_mpscq_t {
-  encore_passive_lf_so_t *head;
-  encore_passive_lf_so_t *tail;
+  so_lockfree_subord_wrapper_t *head;
+  so_lockfree_subord_wrapper_t *tail;
 } so_subord_mpscq_t;
 
 typedef struct so_gc_t {

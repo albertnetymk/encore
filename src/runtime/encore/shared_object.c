@@ -100,48 +100,74 @@ static duration_t* duration_spscq_peek(duration_spscq_t *q)
 
 static void so_subord_mpscq_init(so_subord_mpscq_t *q)
 {
-  encore_passive_lf_so_t *dummy = POOL_ALLOC(encore_passive_lf_so_t);
-  dummy->published = false;
-  q->head = q->tail = dummy;
+  so_lockfree_subord_wrapper_t *d = POOL_ALLOC(so_lockfree_subord_wrapper_t);
+  d->p = NULL;
+  q->head = q->tail = d;
 }
 
 static void so_subord_mpscq_destroy(so_subord_mpscq_t *q)
 {
-  POOL_FREE(encore_passive_lf_so_t, q->tail);
+  POOL_FREE(so_lockfree_subord_wrapper_t, q->tail);
 }
 
-static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
+static so_lockfree_subord_wrapper_t *
+so_lockfree_subord_wrapper_new(encore_passive_lf_so_t *p)
 {
-  encore_passive_lf_so_t *delimiter = POOL_ALLOC(encore_passive_lf_so_t);
-  delimiter->next = NULL;
-  delimiter->published = false;
+  so_lockfree_subord_wrapper_t *w = POOL_ALLOC(so_lockfree_subord_wrapper_t);
+  w->p = p;
+  w->next = NULL;
+  if (p) {
+    p->wrapper = w;
+  }
+  return w;
+}
 
-  encore_passive_lf_so_t* prev =
-    (encore_passive_lf_so_t*)_atomic_exchange(&q->head, delimiter);
-  _atomic_store(&delimiter->prev, prev);
-  _atomic_store(&prev->next, delimiter);
+__attribute__ ((unused))
+static bool so_subord_mpscq_exist(so_subord_mpscq_t *q,
+    so_lockfree_subord_wrapper_t *w)
+{
+  assert(w);
+  if (q->tail == q->head) {
+    return false;
+  }
+
+  so_lockfree_subord_wrapper_t *cur = q->tail->next;
+  while (cur) {
+    if (cur == w) {
+      return true;
+    }
+    cur = cur->next;
+  }
+
+  return false;
 }
 
 static void so_subord_mpscq_push(so_subord_mpscq_t *q,
     encore_passive_lf_so_t *d)
 {
-  assert(d->next == NULL);
-  encore_passive_lf_so_t* prev =
-    (encore_passive_lf_so_t*)_atomic_exchange(&q->head, d);
-  _atomic_store(&d->prev, prev);
-  _atomic_store(&prev->next, d);
+  so_lockfree_subord_wrapper_t *w = so_lockfree_subord_wrapper_new(d);
+  assert(so_subord_mpscq_exist(q, w) == false);
+  so_lockfree_subord_wrapper_t *prev =
+    (so_lockfree_subord_wrapper_t*)_atomic_exchange(&q->head, w);
+  _atomic_store(&w->prev, prev);
+  _atomic_store(&prev->next, w);
+}
+
+static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
+{
+  so_subord_mpscq_push(q, NULL);
 }
 
 static void so_subord_remove_tail(so_subord_mpscq_t *q)
 {
-  encore_passive_lf_so_t *tail = q->tail;
-  encore_passive_lf_so_t *next = tail->next;
-  assert(!tail->published);
-  POOL_FREE(encore_passive_lf_so_t, tail);
+  so_lockfree_subord_wrapper_t *tail = q->tail;
+  so_lockfree_subord_wrapper_t *next = tail->next;
+  assert(tail->p == NULL);
+  POOL_FREE(so_lockfree_subord_wrapper_t, tail);
   q->tail = next;
 }
 
-static encore_passive_lf_so_t* so_subord_mpscq_peak(so_subord_mpscq_t *q)
+static so_lockfree_subord_wrapper_t* so_subord_mpscq_peak(so_subord_mpscq_t *q)
 {
   assert(q->tail);
   if (q->tail == q->head) {
@@ -156,13 +182,13 @@ static void sweep_all_delimiters(so_subord_mpscq_t *q)
   if (q->tail == q->head) {
     return;
   }
-  encore_passive_lf_so_t *cur = q->tail->next;
-  encore_passive_lf_so_t *tmp;
+  so_lockfree_subord_wrapper_t *cur = q->tail->next;
+  so_lockfree_subord_wrapper_t *tmp;
   while (cur != q->head) {
-    if (!cur->published) {
+    if (!cur->p) {
       tmp = cur;
       cur = cur->next;
-      POOL_FREE(encore_passive_lf_so_t, tmp);
+      POOL_FREE(so_lockfree_subord_wrapper_t, tmp);
     } else {
       cur = cur->next;
     }
@@ -171,10 +197,10 @@ static void sweep_all_delimiters(so_subord_mpscq_t *q)
 
 static void free_prefix_delimiters(so_subord_mpscq_t *q)
 {
-  encore_passive_lf_so_t *first = so_subord_mpscq_peak(q);
+  so_lockfree_subord_wrapper_t *first = so_subord_mpscq_peak(q);
   assert(first);
   do {
-    if (first->published) {
+    if (first->p) {
       return;
     }
     so_subord_remove_tail(q);
@@ -183,26 +209,28 @@ static void free_prefix_delimiters(so_subord_mpscq_t *q)
 }
 
 static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
-    encore_passive_lf_so_t *d)
+    so_lockfree_subord_wrapper_t *w)
 {
-  if (!d->next) {
+  assert(so_subord_mpscq_exist(q, w) == true);
+  if (!w->next) {
     so_subord_mpscq_push_delimiter(q);
   }
-  assert(d->prev);
-  assert(d->next);
-  d->prev->next = d->next;
-  d->next->prev = d->prev;
+  assert(w->prev);
+  assert(w->next);
+  w->prev->next = w->next;
+  w->next->prev = w->prev;
 }
 
 static void so_lockfree_heap_push(so_gc_t *so_gc, encore_passive_lf_so_t *f)
 {
-  assert(f->published == true);
   so_subord_mpscq_push(&so_gc->so_subord_mpscq, f);
+  assert(f->wrapper);
 }
 
 static void so_lockfree_heap_remove(so_gc_t *so_gc, encore_passive_lf_so_t *f)
 {
-  so_subord_mpscq_remove(&so_gc->so_subord_mpscq, f);
+  assert(f->wrapper);
+  so_subord_mpscq_remove(&so_gc->so_subord_mpscq, f->wrapper);
 }
 
 extern void pony_so_lockfree_mark(pony_ctx_t* ctx);
@@ -212,11 +240,11 @@ void so_lockfree_markobject(pony_ctx_t *ctx, encore_passive_lf_so_t *p,
 {
   if (!p) { return; }
   p = UNFREEZE(p);
-  assert(p->published);
-  if (p->gc_mark == ctx->so_lockfree_gc_mark) {
+  assert(p->wrapper);
+  if (p->wrapper->gc_mark == ctx->so_lockfree_gc_mark) {
     return;
   }
-  p->gc_mark = ctx->so_lockfree_gc_mark;
+  p->wrapper->gc_mark = ctx->so_lockfree_gc_mark;
   if (f) {
     ctx->stack = gcstack_push(ctx->stack, p);
     ctx->stack = gcstack_push(ctx->stack, f);
@@ -233,15 +261,14 @@ static void mark_sweep(encore_so_t *this)
   gc_handlestack(ctx);
 
   so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
-  encore_passive_lf_so_t *prev;
+  so_lockfree_subord_wrapper_t *prev;
   assert(q->tail);
-  encore_passive_lf_so_t *cur = q->tail->next;
+  so_lockfree_subord_wrapper_t *cur = q->tail->next;
   while (cur) {
-    if (!cur->published || cur->gc_mark == this->gc_mark) {
+    if (cur->p == NULL || cur->gc_mark == this->gc_mark) {
       cur = cur->next;
       continue;
     }
-    // assert(0);
     prev = cur->prev;
     so_subord_mpscq_remove(q, cur);
     // TODO need to check if there's pending recv...
@@ -265,9 +292,11 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
         break;
       }
       f = cur->address;
-      assert(f->published);
+      assert(f->wrapper);
       if (_atomic_load(&f->rc) == 0) {
-        free_prefix_delimiters(&this->so_gc.so_subord_mpscq);
+        so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
+        assert(so_subord_mpscq_exist(q, f->wrapper) == true);
+        free_prefix_delimiters(q);
         so_lockfree_heap_remove(&this->so_gc, f);
         gc_recvobject_shallow(ctx, f);
       }
@@ -429,7 +458,10 @@ void so_lockfree_register_final_cb(void *p, so_lockfree_final_cb_fn final_cb)
   this->so_gc.final_cb = final_cb;
 }
 
-void so_lockfree_register_subord_trace_fn(void *p, pony_trace_fn trace)
+typedef pony_trace_fn non_subord_trace_fn;
+typedef pony_trace_fn subord_trace_fn;
+
+void so_lockfree_register_subord_trace_fn(void *p, subord_trace_fn trace)
 {
   encore_so_t *this = p;
   this->subord_trace = trace;
@@ -469,8 +501,7 @@ static void so_lockfree_publish(encore_so_t *this, void *p)
 {
   assert(p);
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  if (!f->published) {
-    f->published = true;
+  if (!f->wrapper) {
     so_lockfree_heap_push(&this->so_gc, f);
   }
 }
@@ -503,12 +534,12 @@ void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx)
 }
 
 void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
-    pony_trace_fn fn)
+    non_subord_trace_fn fn)
 {
   if (!p) { return; }
   assert(p == UNFREEZE(p));
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  assert(f->published == true);
+  assert(f->wrapper);
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {
@@ -525,14 +556,14 @@ bool so_lockfree_is_published(void *p)
   assert(p);
   assert(p == UNFREEZE(p));
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  return f->published;
+  return f->wrapper != NULL;
 }
 
-void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, pony_trace_fn fn)
+void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, non_subord_trace_fn fn)
 {
   if (!p) { return; }
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)UNFREEZE(p);
-  assert(f->published == true);
+  assert(f->wrapper);
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {

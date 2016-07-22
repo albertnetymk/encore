@@ -454,7 +454,8 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [runtimeTypeInitFunDecl cdecl] ++
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
-    [subord_trace_func_decl cdecl ctable] ++
+    [subord_trace_fun_decl cdecl ctable] ++
+    [non_subord_trace_fun_decl cdecl ctable] ++
     [constructorImpl Shared cname ctable] ++
     [class_subord_fields_apply cdecl ctable] ++
     [class_subord_fields_final_apply cdecl ctable] ++
@@ -563,7 +564,8 @@ translatePassiveClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
     [so_lockfree_subord_finalizer cdecl ctable] ++
     [inverse_trace_fun_decls cdecl] ++
     [tracefunDecl cdecl] ++
-    [subord_trace_func_decl cdecl ctable] ++
+    [subord_trace_fun_decl cdecl ctable] ++
+    [non_subord_trace_fun_decl cdecl ctable] ++
     [barred_trace_fun_decl cdecl] ++
     [constructorImpl Passive cname ctable] ++
     methodImpls ++
@@ -639,7 +641,7 @@ so_lockfree_subord_finalizer A.Class{A.cname, A.cfields, A.cmethods} ctable =
     traceField A.Field {A.fmods, A.ftype, A.fname}
       | is_subord ftype ctable =
           Statement $ Call lf_so_passive_final_name
-            [encoreCtxVar, field, AsLval $ class_subord_trace_fn_name ftype]
+            [encoreCtxVar, field, AsLval $ class_non_subord_trace_fn_name ftype]
       | otherwise =
           Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
       where
@@ -704,7 +706,7 @@ class_subord_fields_final_apply A.Class{A.cname, A.cfields} ctable =
                  , Statement $
                      Call (Nam "so_lockfree_subord_field_final_apply")
                        [ encoreCtxVar, field,
-                         AsLval $ class_subord_trace_fn_name ftype]]
+                         AsLval $ class_non_subord_trace_fn_name ftype]]
       | otherwise =
           Comm $ printf "Skipping %s %s fields" (show fname) (show fmods)
 
@@ -772,8 +774,8 @@ tracefunDecl A.Class{A.cname, A.cfields, A.cmethods} =
               fieldAssign = Assign (Decl (translate ftype, var)) field
           in Seq [fieldAssign, traceVariable ftype var]
 
-subord_trace_func_decl :: A.ClassDecl -> ClassTable -> CCode Toplevel
-subord_trace_func_decl A.Class{A.cname, A.cfields, A.cmethods} ctable =
+subord_trace_fun_decl :: A.ClassDecl -> ClassTable -> CCode Toplevel
+subord_trace_fun_decl A.Class{A.cname, A.cfields, A.cmethods} ctable =
   case find ((== Ty.getId cname ++ "_trace") . show . A.methodName) cmethods of
     Just mdecl@(A.Method{A.mbody}) ->
       Function void (class_subord_trace_fn_name cname)
@@ -789,13 +791,33 @@ subord_trace_func_decl A.Class{A.cname, A.cfields, A.cmethods} ctable =
                         (Var "p")) :
                  map traceField cfields)
   where
-    pred = [A.isSpecField, A.isOnceField, A.isVarField]
+    traceField f@A.Field {A.fmods, A.ftype, A.fname}
+      | is_subord ftype ctable =
+          Statement $ Call ponyTraceObject
+            [encoreCtxVar, field, AsLval $ class_subord_trace_fn_name ftype]
+      | otherwise =
+          Comm $ printf "Skipping non-subord %s %s fields"
+            (show fname) (show fmods)
+      where
+        field = Var "_this" `Arrow` fieldName fname
 
-    subord_trace_field ftype var =
-      Statement $
-        Call ponyTraceObject
-          [encoreCtxVar, var, AsLval $ class_subord_trace_fn_name ftype]
-
+non_subord_trace_fun_decl :: A.ClassDecl -> ClassTable -> CCode Toplevel
+non_subord_trace_fun_decl A.Class{A.cname, A.cfields, A.cmethods} ctable =
+  case find ((== Ty.getId cname ++ "_trace") . show . A.methodName) cmethods of
+    Just mdecl@(A.Method{A.mbody}) ->
+      Function void (class_non_subord_trace_fn_name cname)
+               [(Ptr encoreCtxT, encoreCtxVar), (Ptr void, Var "p")]
+               (Statement $ Call (methodImplName cname (A.methodName mdecl))
+                            [encoreCtxVar, Var "p"])
+    Nothing ->
+      Function void (class_non_subord_trace_fn_name cname)
+               [(Ptr encoreCtxT, encoreCtxVar),
+               (Ptr void, Var "p")]
+               (Seq $
+                (Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
+                        (Var "p")) :
+                 map traceField cfields)
+  where
     traceField f@A.Field {A.fmods, A.ftype, A.fname}
       | is_subord ftype ctable =
           Comm $ printf "Skipping subord %s %s fields" (show fname) (show fmods)

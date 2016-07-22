@@ -344,6 +344,10 @@ class_subord_trace_fn_name :: Ty.Type -> CCode Name
 class_subord_trace_fn_name clazz =
     Nam $ encoreName "subord_trace" (Ty.getId clazz)
 
+class_non_subord_trace_fn_name :: Ty.Type -> CCode Name
+class_non_subord_trace_fn_name clazz =
+    Nam $ encoreName "non_subord_trace" (Ty.getId clazz)
+
 so_lockfree_subord_finalizer_name :: Ty.Type -> CCode Name
 so_lockfree_subord_finalizer_name clazz =
     Nam $ encoreName "so_lockfree_subord_finalizer" $ Ty.getId clazz
