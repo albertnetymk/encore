@@ -40,6 +40,7 @@ typedef struct duration_t {
   uint32_t entry;
   uint32_t exit;
   bool collectible;
+  // can be removed for optimization
   bool closed;
   bool stw;
   struct duration_t *next;
@@ -53,8 +54,6 @@ typedef struct trace_address_list {
 typedef struct to_trace_t {
   duration_t *duration;
   trace_address_list *address;
-  int head_candidate;
-  bool exited;
 } to_trace_t;
 
 static void duration_spscq_init(duration_spscq_t *q)
@@ -74,13 +73,13 @@ static void duration_spscq_push(duration_spscq_t *q, duration_t *d)
 {
   duration_t *prev = q->head;
   q->head = d;
-  prev->next = d;
+  _atomic_store(&prev->next, d);
 }
 
 static duration_t* duration_spscq_pop(duration_spscq_t *q)
 {
   duration_t *tail = q->tail;
-  duration_t *next = tail->next;
+  duration_t *next = _atomic_load(&tail->next);
 
   if (next == NULL) {
     return NULL;
@@ -223,6 +222,7 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
 
 static void so_lockfree_heap_push(so_gc_t *so_gc, encore_passive_lf_so_t *f)
 {
+  assert(f == UNFREEZE(f));
   so_subord_mpscq_push(&so_gc->so_subord_mpscq, f);
   assert(f->wrapper);
 }
@@ -260,6 +260,9 @@ static void mark_sweep(encore_so_t *this)
   this->subord_trace(ctx, this);
   gc_handlestack(ctx);
 
+#ifndef use_stw_mark_sweep
+  // TODO even if an item is not marked, it's unsafe to remove it from the
+  // heap, for it's captured in an item above to be processed in clean_one
   so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
   so_lockfree_subord_wrapper_t *prev;
   assert(q->tail);
@@ -270,13 +273,14 @@ static void mark_sweep(encore_so_t *this)
       continue;
     }
     prev = cur->prev;
-    so_subord_mpscq_remove(q, cur);
+    // so_subord_mpscq_remove(q, cur);
     // TODO need to check if there's pending recv...
-    // gc_recvobject_shallow(ctx, tmp);
+    // gc_recvobject_shallow(ctx, cur->p);
     cur = prev->next;
     // TODO I think the elem in tmp has been consumed; need to rethink this on
     // supporting swap
   }
+#endif
 }
 
 static void clean_one(encore_so_t *this, to_trace_t *item)
@@ -352,12 +356,20 @@ static void set_collectible(encore_so_t *this, duration_t *d)
 {
   // multithread entry
   // called by any thread on exiting so
-  if (!_atomic_load(&d->closed)) { return; }
+  assert(d->closed);
   if (_atomic_load(&d->collectible)) { return; }
-
-  if (_atomic_load(&d->exit) == _atomic_load(&d->entry)) {
-    _atomic_store(&d->collectible, true);
-    collect(this);
+  uint32_t entry = d->entry;
+  uint32_t old_exit = _atomic_load(&d->exit);
+  while (true) {
+    uint32_t new_exit = old_exit + 1;
+    assert(new_exit <= entry);
+    if (_atomic_cas(&d->exit, &old_exit, new_exit)) {
+      if (entry == new_exit) {
+        _atomic_store(&d->collectible, true);
+        collect(this);
+      }
+      break;
+    }
   }
 }
 
@@ -381,8 +393,6 @@ static inline void relax(void)
 #endif
 }
 
-// caller would wait until the current duration becomes open, increment the
-// entry counter, and push itself into in_out_q
 void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
@@ -391,7 +401,7 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   duration_t *current_d;
   do {
     aba_entry.aba = _atomic_load(&so_gc->aba_entry.aba);
-    current_d = _atomic_load(&so_gc->current_d);
+    current_d = so_gc->current_d;
     if (aba_entry.aba % 2 != 0 || current_d == NULL) {
       relax();
       continue;
@@ -418,27 +428,39 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
-  duration_t *current_d, *old_current_d;
-  old_current_d = current_d = item->duration;
-  assert(current_d);
-  if (_atomic_cas(&so_gc->current_d, &old_current_d, NULL)) {
-    uint32_t current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
-    void_assert(current_aba % 2 == 0);
-    current_d->entry = _atomic_exchange(&so_gc->aba_entry.entry, 0);
-    current_d->head = item;
-    _atomic_store(&current_d->closed, true);
-    _atomic_store(&so_gc->current_d, new_headless_duration());
-    duration_spscq_push(&so_gc->duration_q, current_d);
-#ifdef use_stw_mark_sweep
-      current_d->stw = true;
-#else
-      current_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
-      void_assert(current_aba % 2 == 1);
-#endif
-  }
+  duration_t *old_current_d;
+  duration_t *my_d = item->duration;
+  assert(my_d);
+  aba_entry_t aba_entry;
+  do {
+    aba_entry.aba = _atomic_load(&so_gc->aba_entry.aba);
+    if (aba_entry.aba % 2 != 0) {
+      relax();
+      continue;
+    }
+    uint32_t new_aba = aba_entry.aba + 1;
+    assert(new_aba % 2 == 1);
+    if (_atomic_cas(&so_gc->aba_entry.aba, &aba_entry.aba, new_aba)) {
+      old_current_d = so_gc->current_d;
+      assert(old_current_d);
+      old_current_d->entry = _atomic_exchange(&so_gc->aba_entry.entry, 0);
+      if (old_current_d != my_d) {
+        old_current_d->entry++;
+      }
+      old_current_d->head = item;
+      old_current_d->closed = true;
+      so_gc->current_d = new_headless_duration();
+      duration_spscq_push(&so_gc->duration_q, old_current_d);
+      uint32_t old_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
+      void_assert(old_aba % 2 == 1);
+      break;
+    }
+  } while (true);
 
-  _atomic_add(&current_d->exit, 1);
-  set_collectible(this, current_d);
+  set_collectible(this, my_d);
+  if (old_current_d != my_d) {
+    set_collectible(this, old_current_d);
+  }
 }
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
@@ -470,9 +492,7 @@ void so_lockfree_register_subord_trace_fn(void *p, subord_trace_fn trace)
 to_trace_t *so_to_trace_new(encore_so_t *this)
 {
   to_trace_t *item = POOL_ALLOC(to_trace_t);
-  item->head_candidate = 0;
   item->address = NULL;
-  item->exited = false;
   return item;
 }
 
@@ -543,6 +563,9 @@ void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {
+    // can use store for optimization
+    bool _r = _atomic_cas(&f->wrapper->p, &f, NULL);
+    void_assert(_r);
     pony_gc_recv(ctx);
     pony_traceobject(ctx, f, fn);
     pony_recv_done(ctx);
@@ -567,6 +590,9 @@ void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, non_subord_trace_fn fn)
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {
+    // can use store for optimization
+    bool _r = _atomic_cas(&f->wrapper->p, &f, NULL);
+    void_assert(_r);
     pony_gc_recv(ctx);
     pony_traceobject(ctx, f, fn);
     pony_recv_done(ctx);
