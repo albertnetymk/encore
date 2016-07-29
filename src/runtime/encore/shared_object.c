@@ -126,9 +126,10 @@ static void so_subord_mpscq_destroy(so_subord_mpscq_t *q)
 }
 
 static so_lockfree_subord_wrapper_t *
-so_lockfree_subord_wrapper_new(encore_passive_lf_so_t *p)
+so_lockfree_subord_wrapper_new(encore_passive_lf_so_t *p, uint32_t gc_mark)
 {
   so_lockfree_subord_wrapper_t *w = POOL_ALLOC(so_lockfree_subord_wrapper_t);
+  w->gc_mark = gc_mark;
   w->p = p;
   w->next = NULL;
   if (p) {
@@ -158,9 +159,9 @@ static bool so_subord_mpscq_exist(so_subord_mpscq_t *q,
 }
 
 static void so_subord_mpscq_push(so_subord_mpscq_t *q,
-    encore_passive_lf_so_t *d)
+    encore_passive_lf_so_t *d, uint32_t gc_mark)
 {
-  so_lockfree_subord_wrapper_t *w = so_lockfree_subord_wrapper_new(d);
+  so_lockfree_subord_wrapper_t *w = so_lockfree_subord_wrapper_new(d, gc_mark-1);
   assert(so_subord_mpscq_exist(q, w) == false);
   so_lockfree_subord_wrapper_t *prev =
     (so_lockfree_subord_wrapper_t*)_atomic_exchange(&q->head, w);
@@ -170,7 +171,7 @@ static void so_subord_mpscq_push(so_subord_mpscq_t *q,
 
 static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
 {
-  so_subord_mpscq_push(q, NULL);
+  so_subord_mpscq_push(q, NULL, 1);
 }
 
 static void so_subord_remove_tail(so_subord_mpscq_t *q)
@@ -236,10 +237,10 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
   w->next->prev = w->prev;
 }
 
-static void so_lockfree_heap_push(so_gc_t *so_gc, encore_passive_lf_so_t *f)
+static void so_lockfree_heap_push(encore_so_t *this, encore_passive_lf_so_t *f)
 {
   assert(f == UNFREEZE(f));
-  so_subord_mpscq_push(&so_gc->so_subord_mpscq, f);
+  so_subord_mpscq_push(&this->so_gc.so_subord_mpscq, f, this->gc_mark);
   assert(f->wrapper);
 }
 
@@ -590,7 +591,7 @@ static void so_lockfree_publish(encore_so_t *this, void *p)
   assert(p);
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   if (!f->wrapper) {
-    so_lockfree_heap_push(&this->so_gc, f);
+    so_lockfree_heap_push(this, f);
   }
 }
 
@@ -643,7 +644,7 @@ void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
 
 // TODO do we need non_subord_field_final_apply??
 
-bool so_lockfree_is_published(void *p)
+static bool so_lockfree_is_published(void *p)
 {
   assert(p);
   assert(p == UNFREEZE(p));
@@ -655,7 +656,7 @@ void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, non_subord_trace_fn fn)
 {
   if (!p) { return; }
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)UNFREEZE(p);
-  assert(f->wrapper);
+  if (!f->wrapper) { return; }
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {
@@ -835,11 +836,15 @@ void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F)
 {
   so_lockfree_inc_rc(rhs);
-  so_lockfree_dec_rc(lhs);
+  if (so_lockfree_dec_rc(lhs) == 1 && so_lockfree_is_published(lhs)) {
+      so_lockfree_delay_recv(ctx, lhs);
+  }
 }
 
-void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs)
+void _so_lockfree_assign_subord_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs)
 {
   so_lockfree_inc_rc(rhs);
-  so_lockfree_dec_rc(lhs);
+  if (so_lockfree_dec_rc(lhs) == 1 && so_lockfree_is_published(lhs)) {
+      so_lockfree_delay_recv(ctx, lhs);
+  }
 }

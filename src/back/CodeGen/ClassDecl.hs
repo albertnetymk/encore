@@ -629,9 +629,7 @@ so_lockfree_subord_finalizer A.Class{A.cname, A.cfields, A.cmethods} ctable =
   Function void (so_lockfree_subord_finalizer_name cname)
     [(Ptr void, Var "p")]
     (Seq $
-      [ Statement $ If (Call (Nam "so_lockfree_is_published") [Var "p"])
-          Skip $ Return $ Var ""
-      , Assign (Decl (Ptr encoreCtxT, AsLval encoreCtxName)) $
+      [ Assign (Decl (Ptr encoreCtxT, AsLval encoreCtxName)) $
          Call (Nam "encore_ctx") ([] :: [CCode Lval])
       , Assign (Decl (Ptr . AsType $ classTypeName cname, Var "_this"))
          (Var "p")

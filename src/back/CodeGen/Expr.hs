@@ -353,38 +353,35 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
            Call arraySet [AsExpr ntarg, AsExpr nindex, asEncoreArgT ty $ AsExpr nrhs]
     return (unit, Seq [trhs, ttarg, tindex, theSet])
 
-  translate expr@A.Assign{A.lhs, A.rhs} = do
+  translate expr@A.Assign{A.lhs=lhs@A.FieldAccess{A.name, A.target}, A.rhs} = do
     (nrhs, trhs) <- translate rhs
-    castRhs <- case lhs of
-                 A.FieldAccess {A.name, A.target} ->
-                     do fld <- gets $ Ctx.lookupField (A.getType target) name
-                        if Ty.isTypeVar (A.ftype fld) then
-                            return $ asEncoreArgT (translate . A.getType $ rhs) $ AsExpr nrhs
-                        else
-                            return $ upCast nrhs
-                 _ -> return $ upCast nrhs
-    lval <- mkLval lhs
-    prep <-
-      case expr of
-        A.Assign{A.lhs = lhs@A.FieldAccess{A.name, A.target}, A.rhs} -> do
-          fld <- gets $ Ctx.lookupField (A.getType target) name
-          if A.isOnceField fld || A.isSpecField fld then
-            return $
-              Statement $ Call (Nam "_SO_LOCKFREE_ASSIGN_SPEC_WRAPPER")
-                [lval, nrhs, AsLval $ classTraceFnName (A.getType rhs)]
-          else do
-            traits <- gets $
-              liftM Ty.typesFromCapability . Ctx.lookup_implemented_capa $
-                A.getType lhs
-            if Ty.isClassType (A.getType lhs) &&
-               any Ty.isSpineRefType traits then
-              return $
-                Statement $ Call (Nam "_SO_LOCKFREE_ASSIGN_SUBORD_WRAPPER")
-                  [lval, nrhs]
-            else
-              return skip_prep
-        _ -> return skip_prep
-    return (unit, Seq [trhs, prep, Assign lval castRhs])
+    castRhs <- do
+      fld <- gets $ Ctx.lookupField (A.getType target) name
+      if Ty.isTypeVar (A.ftype fld) then
+        return $ asEncoreArgT (translate . A.getType $ rhs) $ AsExpr nrhs
+      else
+        return $ upCast nrhs
+    (o, to) <- translate target
+    lval <- return $ o `Arrow` (fieldName name)
+    prep <- do
+      fld <- gets $ Ctx.lookupField (A.getType target) name
+      if A.isOnceField fld || A.isSpecField fld then
+        return $
+          Statement $ Call (Nam "_SO_LOCKFREE_ASSIGN_SPEC_WRAPPER")
+            [lval, nrhs, AsLval $ classTraceFnName (A.getType rhs)]
+      else do
+        traits <- gets $
+          liftM Ty.typesFromCapability . Ctx.lookup_implemented_capa $
+            A.getType lhs
+        (ntarg, ttarg) <- translate target
+        if Ty.isClassType (A.getType lhs) &&
+           any Ty.isSpineRefType traits then
+          return $
+            Statement $ Call (Nam "_SO_LOCKFREE_ASSIGN_SUBORD_WRAPPER")
+              [lval, nrhs]
+        else
+          return skip_prep
+    return (unit, Seq [trhs, to, prep, Assign lval castRhs])
     where
       skip_prep =
           Seq ([Comm "only prep for spec, once and spine"] :: [CCode Stat])
@@ -394,14 +391,24 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
           rhsType = A.getType rhs
           needUpCast = rhsType /= lhsType
           cast = Cast (translate lhsType)
-      mkLval (A.VarAccess {A.name}) =
-         do ctx <- get
-            case Ctx.substLkp ctx name of
-              Just substName -> return substName
-              Nothing -> return $ Var (show name)
-      mkLval (A.FieldAccess {A.target, A.name}) =
-         do (ntarg, ttarg) <- translate target
-            return (Deref (StatAsExpr ntarg ttarg) `Dot` (fieldName name))
+
+  translate expr@A.Assign{A.lhs, A.rhs} = do
+    (nrhs, trhs) <- translate rhs
+    castRhs <- return $ upCast nrhs
+    (lval, tlhs) <- mkLval lhs
+    return (unit, Seq [trhs, Assign lval castRhs])
+    where
+      upCast e = if needUpCast then cast e else AsExpr e
+        where
+          lhsType = A.getType lhs
+          rhsType = A.getType rhs
+          needUpCast = rhsType /= lhsType
+          cast = Cast (translate lhsType)
+      mkLval (A.VarAccess {A.name}) = do
+        ctx <- get
+        case Ctx.substLkp ctx name of
+          Just substName -> return (substName, [])
+          Nothing -> return $ (Var (show name), [])
       mkLval e = error $ "Cannot translate '" ++ (show e) ++ "' to a valid lval"
 
   translate maybe@(A.MaybeValue _ (A.JustData e)) = do

@@ -118,7 +118,7 @@ typedef struct encore_so_t
   so_lockfree_assign_spec_wrapper(_ctx, LHS, RHS, F)
 
 #define _SO_LOCKFREE_ASSIGN_SUBORD_WRAPPER(LHS, RHS) \
-  _so_lockfree_assign_subord_wrapper(LHS, RHS)
+  _so_lockfree_assign_subord_wrapper(_ctx, LHS, RHS)
 
 typedef struct to_trace_t to_trace_t;
 
@@ -147,7 +147,6 @@ void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);
 void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, pony_trace_fn fn);
 size_t so_lockfree_inc_rc(void *p);
 size_t so_lockfree_dec_rc(void *p);
-bool so_lockfree_is_published(void *p);
 bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     void *X, void *Y, void *_Z, pony_trace_fn F);
 void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F);
@@ -157,6 +156,6 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F);
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F);
-void _so_lockfree_assign_subord_wrapper(void *lhs, void *rhs);
+void _so_lockfree_assign_subord_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs);
 void so_lockfree_non_spec_field_apply(void *p);
 #endif /* end of include guard: SHARED_OBJECT_H_L6JOK8YX */
