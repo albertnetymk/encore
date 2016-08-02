@@ -47,7 +47,7 @@ typedef struct duration_t {
   uint32_t entry;
   uint32_t exit;
   bool collectible;
-  // can be removed for optimization
+  // may be removed for optimization
   bool closed;
   bool stw;
   struct duration_t *next;
@@ -129,11 +129,14 @@ static so_lockfree_subord_wrapper_t *
 so_lockfree_subord_wrapper_new(encore_passive_lf_so_t *p, uint32_t gc_mark)
 {
   so_lockfree_subord_wrapper_t *w = POOL_ALLOC(so_lockfree_subord_wrapper_t);
-  w->gc_mark = gc_mark;
-  w->p = p;
-  w->next = NULL;
   if (p) {
+    w->gc_mark = gc_mark - 1;
+    w->p = p;
+    w->next = NULL;
     p->wrapper = w;
+  } else {
+    w->p = NULL;
+    w->next = NULL;
   }
   return w;
 }
@@ -161,11 +164,10 @@ static bool so_subord_mpscq_exist(so_subord_mpscq_t *q,
 static void so_subord_mpscq_push(so_subord_mpscq_t *q,
     encore_passive_lf_so_t *d, uint32_t gc_mark)
 {
-  so_lockfree_subord_wrapper_t *w = so_lockfree_subord_wrapper_new(d, gc_mark-1);
-  assert(so_subord_mpscq_exist(q, w) == false);
+  so_lockfree_subord_wrapper_t *w = so_lockfree_subord_wrapper_new(d, gc_mark);
   so_lockfree_subord_wrapper_t *prev =
     (so_lockfree_subord_wrapper_t*)_atomic_exchange(&q->head, w);
-  _atomic_store(&w->prev, prev);
+  w->prev = prev;
   _atomic_store(&prev->next, w);
 }
 
@@ -179,6 +181,7 @@ static void so_subord_remove_tail(so_subord_mpscq_t *q)
   so_lockfree_subord_wrapper_t *tail = q->tail;
   so_lockfree_subord_wrapper_t *next = tail->next;
   assert(tail->p == NULL);
+  assert(next);
   POOL_FREE(so_lockfree_subord_wrapper_t, tail);
   q->tail = next;
 }
@@ -228,9 +231,10 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
     so_lockfree_subord_wrapper_t *w)
 {
   assert(so_subord_mpscq_exist(q, w) == true);
-  if (!w->next) {
+  if (!_atomic_load(&w->next)) {
     so_subord_mpscq_push_delimiter(q);
   }
+  while(!_atomic_load(&w->next)) { relax(); }
   assert(w->prev);
   assert(w->next);
   w->prev->next = w->next;
@@ -240,6 +244,7 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
 static void so_lockfree_heap_push(encore_so_t *this, encore_passive_lf_so_t *f)
 {
   assert(f == UNFREEZE(f));
+  assert(f->wrapper == NULL);
   so_subord_mpscq_push(&this->so_gc.so_subord_mpscq, f, this->gc_mark);
   assert(f->wrapper);
 }
@@ -278,7 +283,6 @@ static void mark_sweep(encore_so_t *this)
   this->subord_trace(ctx, this);
   gc_handlestack(ctx);
 
-// #if 0
   so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
   so_lockfree_subord_wrapper_t *prev;
   assert(q->tail);
@@ -298,7 +302,6 @@ static void mark_sweep(encore_so_t *this)
     // TODO I think the elem in tmp has been consumed; need to rethink this on
     // supporting swap
   }
-// #endif
 }
 
 static void clean_one(encore_so_t *this, to_trace_t *item)
@@ -309,18 +312,17 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
   {
     trace_address_list *cur = item->address;
     trace_address_list *pre;
-    while (true) {
-      if (!cur) {
-        break;
-      }
+    while (cur) {
       f = cur->address;
-      assert(f->wrapper);
-      if (_atomic_load(&f->rc) == 0) {
-        so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
-        assert(so_subord_mpscq_exist(q, f->wrapper) == true);
-        free_prefix_delimiters(q);
-        so_lockfree_heap_remove(&this->so_gc, f);
-        gc_recvobject_shallow(ctx, f);
+      if (((uintptr_t)f & 1) == 0) {
+        assert(f->wrapper);
+        if (_atomic_load(&f->rc) == 0) {
+          so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
+          assert(so_subord_mpscq_exist(q, f->wrapper) == true);
+          free_prefix_delimiters(q);
+          so_lockfree_heap_remove(&this->so_gc, f);
+          gc_recvobject_shallow(ctx, f);
+        }
       }
       pre = cur;
       cur = cur->next;
@@ -459,6 +461,56 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
 }
 
 #ifdef use_stw_mark_sweep
+static void subsume_former_alias_address(duration_t *start, duration_t *end)
+{
+  duration_t *d_cur = start;
+  to_trace_t *latter = end->head;
+  while (d_cur && d_cur != end) {
+    assert(d_cur->closed == true);
+    to_trace_t *former = d_cur->head;
+    trace_address_list *former_cur = former->address;
+    trace_address_list *latter_cur = latter->address;
+    while (latter_cur) {
+      while (former_cur) {
+        if (former_cur->address == latter_cur->address) {
+          _atomic_store(&former_cur->address,
+              (void*) ((uintptr_t)former_cur->address | 1));
+          break;
+        }
+        former_cur = former_cur->next;
+      }
+      latter_cur = latter_cur->next;
+    }
+    d_cur = d_cur->next;
+  }
+}
+#else
+static void subsume_former_alias_address(duration_t *start, duration_t *end)
+{
+  duration_t *d_cur = start;
+  to_trace_t *latter = end->head;
+  while (d_cur != end) {
+    assert(d_cur->closed == true);
+    to_trace_t *former = d_cur->head;
+    trace_address_list *former_cur = former->address;
+    trace_address_list *latter_cur = latter->address;
+    while (latter_cur) {
+      while (former_cur) {
+        if (former_cur->address == latter_cur->address) {
+          _atomic_store(&former_cur->address,
+              (void*) ((uintptr_t)former_cur->address | 1));
+          break;
+        }
+        former_cur = former_cur->next;
+      }
+      latter_cur = latter_cur->next;
+    }
+    d_cur = d_cur->next;
+  }
+}
+#endif
+
+#ifdef use_stw_mark_sweep
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
@@ -483,10 +535,12 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
   assert(current_d->entry > 0);
   current_d->head = item;
   current_d->closed = true;
-  duration_spscq_push_atomic(&so_gc->duration_q, current_d);
+  duration_spscq_t *d_q = &so_gc->duration_q;
+  duration_spscq_push_atomic(d_q, current_d);
 
   if (current_d != my_d) {
     assert(current_d->stw != true);
+    subsume_former_alias_address(duration_spscq_peek(d_q), current_d);
     set_collectible(this, current_d);
   }
   while (!_atomic_load(&my_d->stw)) { relax(); }
@@ -496,7 +550,7 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
   so_gc_t *so_gc = &this->so_gc;
-  duration_t *old_current_d;
+  duration_t *current_d;
   duration_t *my_d = item->duration;
   assert(my_d);
   aba_entry_t aba_entry;
@@ -509,26 +563,27 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
     uint32_t new_aba = aba_entry.aba + 1;
     assert(new_aba % 2 == 1);
     if (_atomic_cas(&so_gc->aba_entry.aba, &aba_entry.aba, new_aba)) {
-      old_current_d = so_gc->current_d;
-      assert(old_current_d);
-      old_current_d->entry = _atomic_exchange(&so_gc->aba_entry.entry, 0);
-      if (old_current_d != my_d) {
-        old_current_d->entry++;
+      current_d = so_gc->current_d;
+      assert(current_d);
+      current_d->entry = _atomic_exchange(&so_gc->aba_entry.entry, 0);
+      if (current_d != my_d) {
+        current_d->entry++;
       }
-      old_current_d->head = item;
-      old_current_d->closed = true;
+      current_d->head = item;
+      current_d->closed = true;
       so_gc->current_d = new_headless_duration();
-      duration_spscq_push(&so_gc->duration_q, old_current_d);
+      duration_spscq_push(&so_gc->duration_q, current_d);
       uint32_t old_aba = _atomic_add(&so_gc->aba_entry.aba, 1);
       void_assert(old_aba % 2 == 1);
       break;
     }
   } while (true);
 
-  set_collectible(this, my_d);
-  if (old_current_d != my_d) {
-    set_collectible(this, old_current_d);
+  if (current_d != my_d) {
+    subsume_former_alias_address(my_d, current_d);
+    set_collectible(this, current_d);
   }
+  set_collectible(this, my_d);
 }
 #endif
 
@@ -565,7 +620,7 @@ to_trace_t *so_to_trace_new(encore_so_t *this)
   return item;
 }
 
-void so_to_trace(to_trace_t *item, void *p)
+static void so_to_trace(to_trace_t *item, void *p)
 {
   trace_address_list *new = POOL_ALLOC(trace_address_list);
   new->address = p;
