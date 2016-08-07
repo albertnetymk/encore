@@ -15,6 +15,12 @@
 #define _atomic_sub(PTR, VAL) \
   (__atomic_fetch_sub(PTR, VAL, __ATOMIC_RELEASE))
 
+#define _atomic_load_relaxed(PTR) \
+  __atomic_load_n(PTR, __ATOMIC_RELAXED)
+
+#define _atomic_store_relaxed(PTR, VAL) \
+  __atomic_store_n(PTR, VAL, __ATOMIC_RELAXED)
+
 static inline void gc_sendobject_shallow(pony_ctx_t *ctx, void *p)
 {
   gc_sendobject(ctx, p, NULL);
@@ -304,6 +310,11 @@ static void mark_sweep(encore_so_t *this)
   }
 }
 
+static inline bool is_marked(void *p)
+{
+  return ((uintptr_t)p & 1) == 1;
+}
+
 static void clean_one(encore_so_t *this, to_trace_t *item)
 {
   assert(item);
@@ -314,7 +325,7 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
     trace_address_list *pre;
     while (cur) {
       f = cur->address;
-      if (((uintptr_t)f & 1) == 0) {
+      if (!is_marked(f)) {
         assert(f->wrapper);
         if (_atomic_load(&f->rc) == 0) {
           so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
@@ -460,35 +471,14 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   item->duration = current_d;
 }
 
+static void subsume_former_alias_address(duration_t *start, duration_t *end)
+{
 #ifdef use_stw_mark_sweep
-static void subsume_former_alias_address(duration_t *start, duration_t *end)
-{
+  if (!start) { return; }
+#endif
   duration_t *d_cur = start;
   to_trace_t *latter = end->head;
-  while (d_cur && d_cur != end) {
-    assert(d_cur->closed == true);
-    to_trace_t *former = d_cur->head;
-    trace_address_list *former_cur = former->address;
-    trace_address_list *latter_cur = latter->address;
-    while (latter_cur) {
-      while (former_cur) {
-        if (former_cur->address == latter_cur->address) {
-          _atomic_store(&former_cur->address,
-              (void*) ((uintptr_t)former_cur->address | 1));
-          break;
-        }
-        former_cur = former_cur->next;
-      }
-      latter_cur = latter_cur->next;
-    }
-    d_cur = d_cur->next;
-  }
-}
-#else
-static void subsume_former_alias_address(duration_t *start, duration_t *end)
-{
-  duration_t *d_cur = start;
-  to_trace_t *latter = end->head;
+  void *former_addr, *latter_addr;
   while (d_cur != end) {
     assert(d_cur->closed == true);
     to_trace_t *former = d_cur->head;
@@ -496,9 +486,12 @@ static void subsume_former_alias_address(duration_t *start, duration_t *end)
     trace_address_list *latter_cur = latter->address;
     while (latter_cur) {
       while (former_cur) {
-        if (former_cur->address == latter_cur->address) {
-          _atomic_store(&former_cur->address,
-              (void*) ((uintptr_t)former_cur->address | 1));
+        // benign data race on reading and marking address
+        former_addr = _atomic_load_relaxed(&former_cur->address);
+        latter_addr = _atomic_load_relaxed(&latter_cur->address);
+        if (!is_marked(former_addr) && former_addr == latter_addr) {
+          _atomic_store_relaxed(&former_cur->address,
+              (void*) ((uintptr_t)former_addr | 1));
           break;
         }
         former_cur = former_cur->next;
@@ -508,7 +501,6 @@ static void subsume_former_alias_address(duration_t *start, duration_t *end)
     d_cur = d_cur->next;
   }
 }
-#endif
 
 #ifdef use_stw_mark_sweep
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
