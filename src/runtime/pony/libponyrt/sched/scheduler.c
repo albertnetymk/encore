@@ -368,6 +368,7 @@ void public_run(pony_actor_t *actor)
   jump_origin();
 }
 
+void so_lockfree_address_wrapper_set_init(pony_ctx_t *ctx);
 static void *run_thread(void *arg)
 {
   scheduler_t* sched = (scheduler_t*) arg;
@@ -386,6 +387,7 @@ static void *run_thread(void *arg)
   }
 #endif
   pony_ctx_t *ctx = &sched->ctx;
+  so_lockfree_address_wrapper_set_init(ctx);
 
   // setup task runner
   assert(this_encore_task==NULL);

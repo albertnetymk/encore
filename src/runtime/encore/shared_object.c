@@ -4,6 +4,7 @@
 #include "mem/pool.h"
 #include "sched/scheduler.h"
 #include "actor/actor.h"
+#include "ds/hash.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -47,6 +48,24 @@ static inline void relax(void)
     asm volatile("pause" ::: "memory");
 #endif
 }
+
+typedef void* trace_address_t;
+
+static size_t address_wrapper_hash(trace_address_t* w)
+{
+  return hash_ptr(w);
+}
+
+static bool address_wrapper_cmp(trace_address_t* a, trace_address_t* b)
+{
+  return a == b;
+}
+
+DECLARE_HASHMAP(address_wrapper_set, trace_address_t);
+
+DEFINE_HASHMAP(address_wrapper_set, trace_address_t, address_wrapper_hash,
+    address_wrapper_cmp, pool_alloc_size, pool_free_size,
+    NULL);
 
 typedef struct duration_t {
   to_trace_t *head;
@@ -579,6 +598,12 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 }
 #endif
 
+void so_lockfree_address_wrapper_set_init(pony_ctx_t *ctx)
+{
+  assert(ctx->set == NULL);
+  ctx->set = POOL_ALLOC(address_wrapper_set_t);
+}
+
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
 {
   encore_so_t *this = (encore_so_t*) encore_create(ctx, type);
@@ -644,7 +669,7 @@ static void so_lockfree_publish(encore_so_t *this, void *p)
 
 static void so_lockfree_delay_recv(pony_ctx_t *ctx, void *p)
 {
-  ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
+  address_wrapper_set_put(ctx->set, p);
 }
 
 void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
@@ -747,11 +772,15 @@ static void so_lockfree_recv(pony_ctx_t *ctx)
 
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item)
 {
-  void *p;
-  while(ctx->lf_acc_stack != NULL) {
-    ctx->lf_acc_stack = gcstack_pop(ctx->lf_acc_stack, &p);
+  size_t i = HASHMAP_BEGIN;
+  address_wrapper_set_t *set = ctx->set;
+  trace_address_t* p;
+
+  while ((p = address_wrapper_set_next(set, &i)) != NULL) {
     so_to_trace(item, p);
   }
+  // reset
+  address_wrapper_set_destroy(set);
 }
 
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p)

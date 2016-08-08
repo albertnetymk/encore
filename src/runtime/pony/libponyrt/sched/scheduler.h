@@ -15,6 +15,8 @@ typedef void (*trace_actor_fn)(pony_ctx_t* ctx, pony_actor_t* actor);
 
 typedef struct scheduler_t scheduler_t;
 
+typedef struct address_wrapper_set_t address_wrapper_set_t;
+
 typedef struct pony_ctx_t
 {
   scheduler_t* scheduler;
@@ -23,7 +25,7 @@ typedef struct pony_ctx_t
   trace_actor_fn trace_actor;
   gcstack_t* stack;
   actormap_t acquire;
-  gcstack_t* lf_acc_stack;
+  address_wrapper_set_t *set;
   gcstack_t* lf_tmp_stack;
   void* boundary;
   bool finalising;
