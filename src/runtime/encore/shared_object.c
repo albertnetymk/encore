@@ -51,9 +51,9 @@ static inline void relax(void)
 
 typedef void* trace_address_t;
 
-static size_t address_wrapper_hash(trace_address_t* w)
+static size_t address_wrapper_hash(trace_address_t* p)
 {
-  return hash_ptr(w);
+  return hash_ptr(p);
 }
 
 static bool address_wrapper_cmp(trace_address_t* a, trace_address_t* b)
@@ -266,17 +266,25 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
   w->next->prev = w->prev;
 }
 
+static bool so_lockfree_is_in_heap(void *p)
+{
+  assert(p);
+  assert(p == UNFREEZE(p));
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  return f->wrapper != NULL && ((uintptr_t)f->wrapper & 1) == 0;
+}
+
 static void so_lockfree_heap_push(encore_so_t *this, encore_passive_lf_so_t *f)
 {
   assert(f == UNFREEZE(f));
-  assert(f->wrapper == NULL);
+  assert(!so_lockfree_is_in_heap(f));
   so_subord_mpscq_push(&this->so_gc.so_subord_mpscq, f, this->gc_mark);
-  assert(f->wrapper);
+  assert(so_lockfree_is_in_heap(f));
 }
 
 static void so_lockfree_heap_remove(so_gc_t *so_gc, encore_passive_lf_so_t *f)
 {
-  assert(f->wrapper);
+  assert(so_lockfree_is_in_heap(f));
   so_subord_mpscq_remove(&so_gc->so_subord_mpscq, f->wrapper);
 }
 
@@ -287,7 +295,7 @@ void so_lockfree_markobject(pony_ctx_t *ctx, encore_passive_lf_so_t *p,
 {
   if (!p) { return; }
   p = UNFREEZE(p);
-  assert(p->wrapper);
+  assert(so_lockfree_is_in_heap(p));
   if (p->wrapper->gc_mark == ctx->so_lockfree_gc_mark) {
     return;
   }
@@ -329,6 +337,11 @@ static void mark_sweep(encore_so_t *this)
   }
 }
 
+static inline void* unmark(void *p)
+{
+  return (void*)((uintptr_t)p & ~1UL);
+}
+
 static inline bool is_marked(void *p)
 {
   return ((uintptr_t)p & 1) == 1;
@@ -345,7 +358,7 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
     while (cur) {
       f = cur->address;
       if (!is_marked(f)) {
-        assert(f->wrapper);
+        assert(so_lockfree_is_in_heap(f));
         if (_atomic_load(&f->rc) == 0) {
           so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
           assert(so_subord_mpscq_exist(q, f->wrapper) == true);
@@ -363,11 +376,43 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
   POOL_FREE(to_trace_t, item);
 }
 
+static void subsume_former_alias_address(duration_t *start, duration_t *end)
+{
+  duration_t *d_cur = start;
+  to_trace_t *latter = end->head;
+  void *former_addr, *latter_addr;
+  while (d_cur != end) {
+    assert(d_cur->closed == true);
+    to_trace_t *former = d_cur->head;
+    trace_address_list *latter_cur = latter->address;
+    while (latter_cur) {
+      latter_addr = unmark(_atomic_load_relaxed(&latter_cur->address));
+      trace_address_list *former_cur = former->address;
+      while (former_cur) {
+        // benign data race on reading and marking address
+        former_addr = _atomic_load_relaxed(&former_cur->address);
+        if (!is_marked(former_addr) && former_addr == latter_addr) {
+          _atomic_store_relaxed(&former_cur->address,
+              (void*) ((uintptr_t)former_addr | 1));
+          break;
+        }
+        former_cur = former_cur->next;
+      }
+      latter_cur = latter_cur->next;
+    }
+    d_cur = d_cur->next;
+  }
+}
+
 #ifdef use_stw_mark_sweep
 static void collect(encore_so_t *this)
 {
   // single thread
   so_gc_t *so_gc = &this->so_gc;
+  duration_t *start = so_gc->duration_q.tail->next;
+  duration_t *end = so_gc->duration_q.head;
+  assert(start && end);
+  subsume_former_alias_address(start, end);
   duration_t *d;
   while ((d = duration_spscq_pop(&so_gc->duration_q))) {
     assert(d->collectible);
@@ -402,7 +447,6 @@ static void collect(encore_so_t *this)
       duration_t *_d = duration_spscq_pop(&so_gc->duration_q);
       void_assert(d == _d);
       if (d->stw) {
-        void_assert(mark_sweep);
         mark_sweep(this);
         uint32_t current_aba = _atomic_add(&this->so_gc.aba_entry.aba, 1);
         void_assert(current_aba % 2 == 1);
@@ -490,37 +534,6 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   item->duration = current_d;
 }
 
-static void subsume_former_alias_address(duration_t *start, duration_t *end)
-{
-#ifdef use_stw_mark_sweep
-  if (!start) { return; }
-#endif
-  duration_t *d_cur = start;
-  to_trace_t *latter = end->head;
-  void *former_addr, *latter_addr;
-  while (d_cur != end) {
-    assert(d_cur->closed == true);
-    to_trace_t *former = d_cur->head;
-    trace_address_list *former_cur = former->address;
-    trace_address_list *latter_cur = latter->address;
-    while (latter_cur) {
-      while (former_cur) {
-        // benign data race on reading and marking address
-        former_addr = _atomic_load_relaxed(&former_cur->address);
-        latter_addr = _atomic_load_relaxed(&latter_cur->address);
-        if (!is_marked(former_addr) && former_addr == latter_addr) {
-          _atomic_store_relaxed(&former_cur->address,
-              (void*) ((uintptr_t)former_addr | 1));
-          break;
-        }
-        former_cur = former_cur->next;
-      }
-      latter_cur = latter_cur->next;
-    }
-    d_cur = d_cur->next;
-  }
-}
-
 #ifdef use_stw_mark_sweep
 void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 {
@@ -551,7 +564,6 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
 
   if (current_d != my_d) {
     assert(current_d->stw != true);
-    subsume_former_alias_address(duration_spscq_peek(d_q), current_d);
     set_collectible(this, current_d);
   }
   while (!_atomic_load(&my_d->stw)) { relax(); }
@@ -602,6 +614,8 @@ void so_lockfree_address_wrapper_set_init(pony_ctx_t *ctx)
 {
   assert(ctx->set == NULL);
   ctx->set = POOL_ALLOC(address_wrapper_set_t);
+  // force init
+  ctx->set->contents.size = 0;
 }
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
@@ -658,13 +672,38 @@ void encore_so_finalizer(void *p)
   so_subord_mpscq_destroy(&this->so_gc.so_subord_mpscq);
 }
 
+static void so_lockfree_pre_publish(void *p)
+{
+  assert(p);
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  f->wrapper = (void*)1;
+  so_lockfree_inc_rc(f);
+}
+
+static void so_lockfree_unpre_publish(void *p)
+{
+  assert(p);
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  assert(f->wrapper = (void*)1);
+  f->wrapper = NULL;
+  so_lockfree_dec_rc(f);
+}
+
 static void so_lockfree_publish(encore_so_t *this, void *p)
 {
   assert(p);
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  if (!f->wrapper) {
+  if (!so_lockfree_is_in_heap(f)) {
     so_lockfree_heap_push(this, f);
   }
+}
+
+static bool so_lockfree_is_published(void *p)
+{
+  assert(p);
+  assert(p == UNFREEZE(p));
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  return f->wrapper != NULL;
 }
 
 static void so_lockfree_delay_recv(pony_ctx_t *ctx, void *p)
@@ -686,7 +725,6 @@ void so_lockfree_non_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
   if (!p) { return; }
   so_lockfree_publish(this, p);
   gc_sendobject_shallow(ctx, p);
-  so_lockfree_inc_rc(p);
 }
 
 void so_lockfree_subord_fields_apply_done(pony_ctx_t *ctx)
@@ -715,14 +753,6 @@ void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
 }
 
 // TODO do we need non_subord_field_final_apply??
-
-static bool so_lockfree_is_published(void *p)
-{
-  assert(p);
-  assert(p == UNFREEZE(p));
-  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  return f->wrapper != NULL;
-}
 
 void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, non_subord_trace_fn fn)
 {
@@ -822,7 +852,7 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
   pony_traceobject(ctx, Z, F);
   pony_gc_collect_to_send_done(ctx);
 
-  so_lockfree_inc_rc(Z);
+  so_lockfree_pre_publish(Z);
 
   ret = _atomic_cas((void**)X, &Y, _Z);
   if (ret) {
@@ -830,8 +860,7 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
   } else {
-    so_lockfree_dec_rc(Z);
-    assert(so_lockfree_is_published(Z) == false);
+    so_lockfree_unpre_publish(Z);
     so_lockfree_unsend(ctx);
   }
 
@@ -861,7 +890,7 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
   pony_traceobject(ctx, Z, F);
   pony_gc_collect_to_send_done(ctx);
 
-  so_lockfree_inc_rc(Z);
+  so_lockfree_pre_publish(Z);
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
@@ -871,8 +900,7 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
   } else {
-    so_lockfree_dec_rc(Z);
-    assert(so_lockfree_is_published(Z) == false);
+    so_lockfree_unpre_publish(Z);
     so_lockfree_unsend(ctx);
   }
 
@@ -907,10 +935,43 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
   return ret;
 }
 
+bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
+    void *X, void *Y, void *Z, pony_trace_fn F)
+{
+  // TODO currently this is merely link, need to rethink on proper
+  // implementation
+
+  assert(X);
+  bool ret;
+
+  pony_gc_collect_to_send(ctx);
+  so_lockfree_set_trace_boundary(ctx, Y);
+  pony_traceobject(ctx, Z, F);
+  pony_gc_collect_to_send_done(ctx);
+
+  so_lockfree_pre_publish(Z);
+
+  ret = _atomic_cas((void**)X, &Y, Z);
+  if (ret) {
+    if (so_lockfree_dec_rc(Y) == 1) {
+      so_lockfree_delay_recv(ctx, Y);
+    }
+    so_lockfree_publish(this, Z);
+    so_lockfree_send(ctx);
+  } else {
+    so_lockfree_unpre_publish(Z);
+    so_lockfree_unsend(ctx);
+  }
+
+  return ret;
+}
+
 // TODO I can probably unite the two
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F)
 {
+  assert(rhs == UNFREEZE(rhs));
+  assert(lhs == UNFREEZE(lhs));
   so_lockfree_inc_rc(rhs);
   if (so_lockfree_dec_rc(lhs) == 1 && so_lockfree_is_published(lhs)) {
       so_lockfree_delay_recv(ctx, lhs);
@@ -919,6 +980,8 @@ void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
 
 void _so_lockfree_assign_subord_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs)
 {
+  assert(rhs == UNFREEZE(rhs));
+  assert(lhs == UNFREEZE(lhs));
   so_lockfree_inc_rc(rhs);
   if (so_lockfree_dec_rc(lhs) == 1 && so_lockfree_is_published(lhs)) {
       so_lockfree_delay_recv(ctx, lhs);

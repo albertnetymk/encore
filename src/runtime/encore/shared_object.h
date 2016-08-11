@@ -114,6 +114,9 @@ typedef struct encore_so_t
 #define _SO_LOCKFREE_CAS_UNLINK_WRAPPER(X, Y, Z, F) \
   _so_lockfree_cas_unlink_wrapper(_ctx, X, Y, Z, F)
 
+#define _SO_LOCKFREE_CAS_SWAP_WRAPPER(X, Y, Z, F) \
+  _so_lockfree_cas_swap_wrapper(_ctx, (void*)_this, X, Y, Z, F)
+
 #define _SO_LOCKFREE_ASSIGN_SPEC_WRAPPER(LHS, RHS, F) \
   so_lockfree_assign_spec_wrapper(_ctx, LHS, RHS, F)
 
@@ -154,6 +157,8 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     void *X, void *Y, void *_Z, pony_trace_fn F);
 bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     pony_trace_fn F);
+bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
+    void *X, void *Y, void *Z, pony_trace_fn F);
 void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
     pony_trace_fn F);
 void _so_lockfree_assign_subord_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs);

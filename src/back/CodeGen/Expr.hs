@@ -1102,7 +1102,10 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
           A.CAT{A.args = [_,A.VarAccess{},A.FieldAccess{}]} ->
             Call (Nam "_SO_LOCKFREE_CAS_UNLINK_WRAPPER") $
               theArgs ++ [trace_fn]
-          _ -> error "swap not supported"
+          A.CAT{A.args = [_,A.VarAccess{},A.VarAccess{}]} ->
+            Call (Nam "_SO_LOCKFREE_CAS_SWAP_WRAPPER") $
+              theArgs ++ [trace_fn]
+          _ -> error "only link/unlink/swap supported"
         where
           trace_fn = AsExpr . AsLval $ fn_name
           fn_name
