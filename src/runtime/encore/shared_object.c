@@ -147,6 +147,7 @@ static void so_subord_mpscq_init(so_subord_mpscq_t *q)
 
 static void so_subord_mpscq_destroy(so_subord_mpscq_t *q)
 {
+  // cant assert tail == head, for the container may not be empty
   POOL_FREE(so_lockfree_subord_wrapper_t, q->tail);
 }
 
@@ -154,14 +155,11 @@ static so_lockfree_subord_wrapper_t *
 so_lockfree_subord_wrapper_new(encore_passive_lf_so_t *p, uint32_t gc_mark)
 {
   so_lockfree_subord_wrapper_t *w = POOL_ALLOC(so_lockfree_subord_wrapper_t);
+  w->p = p;
+  w->next = NULL;
   if (p) {
     w->gc_mark = gc_mark - 1;
-    w->p = p;
-    w->next = NULL;
     p->wrapper = w;
-  } else {
-    w->p = NULL;
-    w->next = NULL;
   }
   return w;
 }
@@ -198,7 +196,7 @@ static void so_subord_mpscq_push(so_subord_mpscq_t *q,
 
 static void so_subord_mpscq_push_delimiter(so_subord_mpscq_t *q)
 {
-  so_subord_mpscq_push(q, NULL, 1);
+  so_subord_mpscq_push(q, NULL, 0);
 }
 
 static void so_subord_remove_tail(so_subord_mpscq_t *q)
@@ -256,7 +254,7 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
     so_lockfree_subord_wrapper_t *w)
 {
   assert(so_subord_mpscq_exist(q, w) == true);
-  if (!_atomic_load(&w->next)) {
+  if (!_atomic_load_relaxed(&w->next)) {
     so_subord_mpscq_push_delimiter(q);
   }
   while(!_atomic_load(&w->next)) { relax(); }
@@ -264,6 +262,7 @@ static void so_subord_mpscq_remove(so_subord_mpscq_t *q,
   assert(w->next);
   w->prev->next = w->next;
   w->next->prev = w->prev;
+  POOL_FREE(so_lockfree_subord_wrapper_t, w);
 }
 
 static bool so_lockfree_is_in_heap(void *p)
@@ -742,10 +741,15 @@ void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {
-    // TODO need to rethink on supporting mark-sweep
+#ifdef use_stw_mark_sweep
+    // TODO the same as below
+    encore_passive_lf_so_t *_f = f;
+    _atomic_cas(&f->wrapper->p, &_f, NULL);
+#else
     // can use store for optimization
     bool _r = _atomic_cas(&f->wrapper->p, &f, NULL);
     void_assert(_r);
+#endif
     pony_gc_recv(ctx);
     pony_traceobject(ctx, f, fn);
     pony_recv_done(ctx);
@@ -762,10 +766,19 @@ void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, non_subord_trace_fn fn)
   size_t rc = _atomic_sub(&f->rc, 1);
   assert(rc > 0);
   if (rc == 1) {
-    // TODO need to rethink on supporting mark-sweep
+#ifdef use_stw_mark_sweep
+    // TODO currently, it's not necessary to nullify p, for mark-sweep could
+    // collect wrapper anyway; however, it's put here so that mark-sweep is not
+    // needed unless there's cycle in the container
+    // TODO this cas could be dangerous if wrapper is already freed; might get
+    // around using pool for single type of object
+    encore_passive_lf_so_t *_f = f;
+    _atomic_cas(&f->wrapper->p, &_f, NULL);
+#else
     // can use store for optimization
     bool _r = _atomic_cas(&f->wrapper->p, &f, NULL);
     void_assert(_r);
+#endif
     pony_gc_recv(ctx);
     pony_traceobject(ctx, f, fn);
     pony_recv_done(ctx);
@@ -938,7 +951,7 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
 bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     void *X, void *Y, void *Z, pony_trace_fn F)
 {
-  // TODO currently this is merely link, need to rethink on proper
+  // TODO currently this is merely link, need to rethink on proper swap
   // implementation
 
   assert(X);
