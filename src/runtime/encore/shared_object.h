@@ -148,8 +148,6 @@ void so_lockfree_unsend(pony_ctx_t *ctx);
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item);
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p);
 void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, pony_trace_fn fn);
-size_t so_lockfree_inc_rc(void *p);
-size_t so_lockfree_dec_rc(void *p);
 bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     void *X, void *Y, void *_Z, pony_trace_fn F);
 void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F);

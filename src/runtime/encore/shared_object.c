@@ -49,6 +49,23 @@ static inline void relax(void)
 #endif
 }
 
+static size_t so_lockfree_inc_rc(void *p)
+{
+  if (!p) { return 0; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  return _atomic_add(&f->rc, 1);
+}
+
+static size_t so_lockfree_dec_rc(void *p)
+{
+  if (!p) { return 0; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  assert(_atomic_load(&f->rc) != 0);
+  return _atomic_sub(&f->rc, 1);
+}
+
+// was using set to keep address unique, but now each address carries -1 itself
+#if 0
 typedef void* trace_address_t;
 
 static size_t address_wrapper_hash(trace_address_t* p)
@@ -66,6 +83,21 @@ DECLARE_HASHMAP(address_wrapper_set, trace_address_t);
 DEFINE_HASHMAP(address_wrapper_set, trace_address_t, address_wrapper_hash,
     address_wrapper_cmp, pool_alloc_size, pool_free_size,
     NULL);
+
+// was called in each thread before scheduler runs
+void so_lockfree_address_wrapper_set_init(pony_ctx_t *ctx)
+{
+  assert(ctx->set == NULL);
+  ctx->set = POOL_ALLOC(address_wrapper_set_t);
+  // force init
+  ctx->set->contents.size = 0;
+}
+
+// static void so_lockfree_delay_recv(pony_ctx_t *ctx, void *p)
+// {
+//   address_wrapper_set_put(ctx->set, p);
+// }
+#endif
 
 typedef struct duration_t {
   to_trace_t *head;
@@ -358,7 +390,7 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
       f = cur->address;
       if (!is_marked(f)) {
         assert(so_lockfree_is_in_heap(f));
-        if (_atomic_load(&f->rc) == 0) {
+        if (so_lockfree_dec_rc(f) == 1) {
           so_subord_mpscq_t *q = &this->so_gc.so_subord_mpscq;
           assert(so_subord_mpscq_exist(q, f->wrapper) == true);
           free_prefix_delimiters(q);
@@ -375,6 +407,8 @@ static void clean_one(encore_so_t *this, to_trace_t *item)
   POOL_FREE(to_trace_t, item);
 }
 
+// used to eliminate duplicates across duration, it's legal to have duplicates
+__attribute__((unused))
 static void subsume_former_alias_address(duration_t *start, duration_t *end)
 {
   duration_t *d_cur = start;
@@ -410,8 +444,7 @@ static void collect(encore_so_t *this)
   so_gc_t *so_gc = &this->so_gc;
   duration_t *start = so_gc->duration_q.tail->next;
   duration_t *end = so_gc->duration_q.head;
-  assert(start && end);
-  subsume_former_alias_address(start, end);
+  void_assert(start && end);
   duration_t *d;
   while ((d = duration_spscq_pop(&so_gc->duration_q))) {
     assert(d->collectible);
@@ -602,20 +635,11 @@ void so_lockfree_on_exit(encore_so_t *this, to_trace_t *item)
   } while (true);
 
   if (current_d != my_d) {
-    subsume_former_alias_address(my_d, current_d);
     set_collectible(this, current_d);
   }
   set_collectible(this, my_d);
 }
 #endif
-
-void so_lockfree_address_wrapper_set_init(pony_ctx_t *ctx)
-{
-  assert(ctx->set == NULL);
-  ctx->set = POOL_ALLOC(address_wrapper_set_t);
-  // force init
-  ctx->set->contents.size = 0;
-}
 
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
 {
@@ -705,9 +729,11 @@ static bool so_lockfree_is_published(void *p)
   return f->wrapper != NULL;
 }
 
-static void so_lockfree_delay_recv(pony_ctx_t *ctx, void *p)
+static void so_lockfree_delay_dec(pony_ctx_t *ctx, void *p)
 {
-  address_wrapper_set_put(ctx->set, p);
+  if (!p) { return; }
+  assert(so_lockfree_is_published(p));
+  ctx->lf_acc_stack = gcstack_push(ctx->lf_acc_stack, p);
 }
 
 void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
@@ -815,42 +841,17 @@ static void so_lockfree_recv(pony_ctx_t *ctx)
 
 void so_lockfree_register_acc_to_recv(pony_ctx_t *ctx, to_trace_t *item)
 {
-  size_t i = HASHMAP_BEGIN;
-  address_wrapper_set_t *set = ctx->set;
-  trace_address_t* p;
+  void *p;
 
-  while ((p = address_wrapper_set_next(set, &i)) != NULL) {
+  while (ctx->lf_acc_stack != NULL) {
+    ctx->lf_acc_stack = gcstack_pop(ctx->lf_acc_stack, &p);
     so_to_trace(item, p);
   }
-  // reset
-  address_wrapper_set_destroy(set);
 }
 
 void so_lockfree_set_trace_boundary(pony_ctx_t *ctx, void *p)
 {
   ctx->boundary = p;
-}
-
-size_t so_lockfree_get_rc(void *p)
-{
-  if (!p) { return 0; }
-  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  return _atomic_load(&f->rc);
-}
-
-size_t so_lockfree_inc_rc(void *p)
-{
-  if (!p) { return 0; }
-  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  return _atomic_add(&f->rc, 1);
-}
-
-size_t so_lockfree_dec_rc(void *p)
-{
-  if (!p) { return 0; }
-  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
-  assert(_atomic_load(&f->rc) != 0);
-  return _atomic_sub(&f->rc, 1);
 }
 
 bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
@@ -907,9 +908,7 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
-    if (so_lockfree_dec_rc(Y) == 1) {
-      so_lockfree_delay_recv(ctx, Y);
-    }
+    so_lockfree_delay_dec(ctx, Y);
     so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
   } else {
@@ -937,13 +936,9 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
     gc_sendobject_shallow(ctx, Y);
     gc_sendobject_shallow_done(ctx);
 
-    if (so_lockfree_dec_rc(Y) == 1) {
-      so_lockfree_delay_recv(ctx, Y);
-    }
+    so_lockfree_delay_dec(ctx, Y);
   } else {
-    if (so_lockfree_dec_rc(Z) == 1) {
-      so_lockfree_delay_recv(ctx, Z);
-    }
+    so_lockfree_delay_dec(ctx, Z);
   }
   return ret;
 }
@@ -966,9 +961,7 @@ bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
-    if (so_lockfree_dec_rc(Y) == 1) {
-      so_lockfree_delay_recv(ctx, Y);
-    }
+    so_lockfree_delay_dec(ctx, Y);
     so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
   } else {
@@ -986,8 +979,8 @@ void so_lockfree_assign_spec_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs,
   assert(rhs == UNFREEZE(rhs));
   assert(lhs == UNFREEZE(lhs));
   so_lockfree_inc_rc(rhs);
-  if (so_lockfree_dec_rc(lhs) == 1 && so_lockfree_is_published(lhs)) {
-      so_lockfree_delay_recv(ctx, lhs);
+  if (lhs && so_lockfree_is_published(lhs)) {
+      so_lockfree_delay_dec(ctx, lhs);
   }
 }
 
@@ -996,7 +989,7 @@ void _so_lockfree_assign_subord_wrapper(pony_ctx_t *ctx, void *lhs, void *rhs)
   assert(rhs == UNFREEZE(rhs));
   assert(lhs == UNFREEZE(lhs));
   so_lockfree_inc_rc(rhs);
-  if (so_lockfree_dec_rc(lhs) == 1 && so_lockfree_is_published(lhs)) {
-      so_lockfree_delay_recv(ctx, lhs);
+  if (lhs && so_lockfree_is_published(lhs)) {
+      so_lockfree_delay_dec(ctx, lhs);
   }
 }
