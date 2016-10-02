@@ -697,7 +697,7 @@ void encore_so_finalizer(void *p)
 
 static void so_lockfree_pre_publish(void *p)
 {
-  assert(p);
+  if (!p) { return; }
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   f->wrapper = (void*)1;
   so_lockfree_inc_rc(f);
@@ -705,7 +705,7 @@ static void so_lockfree_pre_publish(void *p)
 
 static void so_lockfree_unpre_publish(void *p)
 {
-  assert(p);
+  if (!p) { return; }
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   assert(f->wrapper = (void*)1);
   f->wrapper = NULL;
@@ -714,7 +714,7 @@ static void so_lockfree_unpre_publish(void *p)
 
 static void so_lockfree_publish(encore_so_t *this, void *p)
 {
-  assert(p);
+  if (!p) { return; }
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   if (!so_lockfree_is_in_heap(f)) {
     so_lockfree_heap_push(this, f);
@@ -908,9 +908,10 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
-    so_lockfree_delay_dec(ctx, Y);
     so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
+
+    so_lockfree_delay_dec(ctx, Y);
   } else {
     so_lockfree_unpre_publish(Z);
     so_lockfree_unsend(ctx);
@@ -946,14 +947,11 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
 bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     void *X, void *Y, void *Z, pony_trace_fn F)
 {
-  // TODO currently this is merely link, need to rethink on proper swap
-  // implementation
-
   assert(X);
   bool ret;
 
   pony_gc_collect_to_send(ctx);
-  so_lockfree_set_trace_boundary(ctx, Y);
+  so_lockfree_set_trace_boundary(ctx, NULL);
   pony_traceobject(ctx, Z, F);
   pony_gc_collect_to_send_done(ctx);
 
@@ -961,9 +959,20 @@ bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
-    so_lockfree_delay_dec(ctx, Y);
     so_lockfree_publish(this, Z);
     so_lockfree_send(ctx);
+
+    pony_gc_collect_to_recv(ctx);
+    so_lockfree_set_trace_boundary(ctx, NULL);
+    pony_traceobject(ctx, Y, F);
+    pony_gc_collect_to_recv_done(ctx);
+
+    so_lockfree_recv(ctx);
+
+    gc_sendobject_shallow(ctx, Y);
+    gc_sendobject_shallow_done(ctx);
+
+    so_lockfree_delay_dec(ctx, Y);
   } else {
     so_lockfree_unpre_publish(Z);
     so_lockfree_unsend(ctx);
