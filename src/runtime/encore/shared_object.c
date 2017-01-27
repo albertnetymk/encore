@@ -501,23 +501,15 @@ static void set_collectible(encore_so_t *this, duration_t *d)
   assert(d->closed);
   assert (!_atomic_load(&d->collectible));
   uint32_t entry = d->entry;
-  uint32_t old_exit = _atomic_load(&d->exit);
-  while (true) {
-    uint32_t new_exit = old_exit + 1;
-    assert(new_exit <= entry);
-    if (_atomic_cas(&d->exit, &old_exit, new_exit)) {
-      if (entry == new_exit) {
-        _atomic_store(&d->collectible, true);
+if (_atomic_add(&d->exit, 1) == entry-1) {
+    _atomic_store(&d->collectible, true);
 #ifdef use_stw_mark_sweep
-        if (d->stw) {
-          collect(this);
-        }
-#else
-        collect(this);
-#endif
-      }
-      break;
+    if (d->stw) {
+      collect(this);
     }
+#else
+    collect(this);
+#endif
   }
 }
 
