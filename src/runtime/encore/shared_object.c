@@ -539,14 +539,14 @@ void so_lockfree_on_entry(encore_so_t *this, to_trace_t *item)
   so_gc_t *so_gc = &this->so_gc;
   aba_entry_t aba_entry, new_aba_entry;
   bool entered = false;
-  duration_t *current_d;
+  duration_t *current_d = NULL;
   do {
     aba_entry.aba = _atomic_load(&so_gc->aba_entry.aba);
-    current_d = so_gc->current_d;
-    if (aba_entry.aba % 2 != 0 || current_d == NULL) {
+    if (aba_entry.aba % 2 != 0) {
       relax();
       continue;
     }
+    current_d = so_gc->current_d;
     assert(current_d);
     new_aba_entry.aba = aba_entry.aba;
     aba_entry.entry = _atomic_load(&so_gc->aba_entry.entry);
