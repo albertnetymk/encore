@@ -770,7 +770,7 @@ void so_lockfree_subord_field_final_apply(pony_ctx_t *ctx, void *p,
 #endif
     pony_gc_recv(ctx);
     pony_traceobject(ctx, f, fn);
-    pony_recv_done(ctx);
+    gc_handlestack(ctx);
   }
 }
 
@@ -799,7 +799,7 @@ void so_lockfree_chain_final(pony_ctx_t *ctx, void *p, non_subord_trace_fn fn)
 #endif
     pony_gc_recv(ctx);
     pony_traceobject(ctx, f, fn);
-    pony_recv_done(ctx);
+    gc_handlestack(ctx);
   }
 }
 
