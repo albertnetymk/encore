@@ -1090,10 +1090,15 @@ instance Translatable A.Expr (State Ctx.Context (CCode Lval, CCode Stat)) where
         ctx <- get
         let Just residualVar = Ctx.substLkp ctx f
         return $ Assign residualVar $
-          Call (Nam "_SO_LOCKFREE_CAS_EXTRACT_WRAPPER") $
-            [ AsExpr $ Cast (translate argType) (unfreeze argType narg)
+          if Ty.isPrimitive (A.ftype fdecl) then
+            AsExpr $
+              Cast (translate argType) (unfreeze argType narg)
                 `Arrow` fieldName f
-            , AsExpr $ AsLval $ classTraceFnName $ A.ftype fdecl]
+          else
+            Call (Nam "_SO_LOCKFREE_CAS_EXTRACT_WRAPPER") $
+              [ AsExpr $ Cast (translate argType) (unfreeze argType narg)
+                  `Arrow` fieldName f
+              , AsExpr $ AsLval $ classTraceFnName $ A.ftype fdecl]
       theCAS theArgs =
         case cat of
           A.CAT{A.args = [_,A.FieldAccess{},A.VarAccess{}]} ->
