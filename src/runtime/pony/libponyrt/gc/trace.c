@@ -60,14 +60,14 @@ void pony_gc_mark(pony_ctx_t* ctx)
   ctx->trace_actor = gc_markactor;
 }
 
-extern void so_lockfree_markobject(pony_ctx_t *ctx, void *p, pony_trace_fn f);
+// extern void so_lockfree_markobject(pony_ctx_t *ctx, void *p, pony_trace_fn f);
 
-void pony_so_lockfree_mark(pony_ctx_t* ctx)
-{
-  assert(ctx->stack == NULL);
-  ctx->trace_object = so_lockfree_markobject;
-  ctx->trace_actor = NULL;
-}
+// void pony_so_lockfree_mark(pony_ctx_t* ctx)
+// {
+//   assert(ctx->stack == NULL);
+//   ctx->trace_object = so_lockfree_markobject;
+//   ctx->trace_actor = NULL;
+// }
 
 void pony_gc_acquire(pony_ctx_t *ctx)
 {

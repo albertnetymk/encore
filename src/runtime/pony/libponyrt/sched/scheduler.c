@@ -368,9 +368,13 @@ void public_run(pony_actor_t *actor)
   jump_origin();
 }
 
+extern __thread uint32_t so_thread_index;
+__thread uint32_t so_thread_index;
+
 static void *run_thread(void *arg)
 {
   scheduler_t* sched = (scheduler_t*) arg;
+  so_thread_index = sched->so_thread_index;
   this_scheduler = sched;
   cpu_affinity(sched->cpu);
 
@@ -535,10 +539,12 @@ bool scheduler_start(bool library)
   } else {
     start = 1;
     scheduler[0].tid = pony_thread_self();
+    scheduler[0].so_thread_index = 0;
   }
 
   for(uint32_t i = start; i < scheduler_count; i++)
   {
+    scheduler[i].so_thread_index = i;
     if(!pony_thread_create(&scheduler[i].tid, run_thread, scheduler[i].cpu,
       &scheduler[i]))
       return false;

@@ -421,30 +421,31 @@ constructorImpl act cname ctable =
 
 prep_lf_entry :: String -> [CCode Stat]
 prep_lf_entry thisName =
-  [ init_to_trace thisName
-  , call_on_entry
+  [
+   call_on_entry
   ]
   where
-    to_trace_t_ptr = Ptr to_trace_t
-    to_trace_var = Var "_item"
-    decl_to_trace = Decl (to_trace_t_ptr, to_trace_var)
+    -- to_trace_t_ptr = Ptr to_trace_t
+    -- to_trace_var = Var "_item"
+    -- decl_to_trace = Decl (to_trace_t_ptr, to_trace_var)
     this = Cast (Ptr encoreSoT) $ Var thisName
-    to_trace_new =
-      Call to_trace_new_fn [this]
-    init_to_trace thisName = Assign decl_to_trace to_trace_new
+    -- to_trace_new =
+    --   Call to_trace_new_fn [this]
+    -- init_to_trace thisName = Assign decl_to_trace to_trace_new
     call_on_entry =
-      Statement $ Call so_lockfree_on_entry_fn [this, AsExpr to_trace_var]
+      Statement $ Call so_lockfree_on_entry_fn [AsExpr encoreCtxVar, this]
 
 prep_lf_exit :: String -> [CCode Stat]
 prep_lf_exit thisName =
-  map Statement [call_acc_recv, call_on_exit]
+  -- map Statement [call_acc_recv, call_on_exit]
+  map Statement [call_on_exit]
   where
     to_trace_var = Var "_item"
     this = Cast (Ptr encoreSoT) $ Var thisName
     call_acc_recv =
       Call so_lockfree_register_acc_to_recv_fn [encoreCtxVar, to_trace_var]
     call_on_exit =
-      Call so_lockfree_on_exit_fn [this, AsExpr to_trace_var]
+      Call so_lockfree_on_exit_fn [this]
 
 translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
   Program $ Concat $

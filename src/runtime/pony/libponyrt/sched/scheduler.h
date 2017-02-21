@@ -25,7 +25,6 @@ typedef struct pony_ctx_t
   trace_actor_fn trace_actor;
   gcstack_t* stack;
   actormap_t acquire;
-  gcstack_t *lf_acc_stack;
   gcstack_t *lf_tmp_stack;
   void* boundary;
   bool finalising;
@@ -59,6 +58,7 @@ struct scheduler_t
   pony_thread_id_t tid;
   uint32_t cpu;
   uint32_t node;
+  uint32_t so_thread_index;
   bool terminate;
   bool asio_stopped;
 
