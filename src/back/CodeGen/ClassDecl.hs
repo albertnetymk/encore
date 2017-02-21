@@ -524,13 +524,23 @@ translateSharedClass cdecl@(A.Class{A.cname, A.cfields, A.cmethods}) ctable =
         -- futureMk mtype =
         --   Call futureFulfilledMkFn
         --     [AsExpr encoreCtxVar, runtimeType mtype, call_actual_method]
+
+        -- TODO manual future elimination
+
+        -- assignFut = Assign declFut $ Var "NULL"
         assignFut = Assign declFut $ futureMk mType
+
         argPairs = zip (map A.ptype mParams) argNames
         trace_args argPairs =
           [Statement $ Call ponyGcSendName [encoreCtxVar]] ++
           (map (Statement . uncurry traceVariable) argPairs) ++
           [Statement $ Call ponySendDoneName [encoreCtxVar]]
         fulfil_fut =
+          -- TODO manual future elimination
+
+          -- Statement $ (Call (methodImplName cname mName)
+          --                     (encoreCtxVar : Var thisName :
+          --                      map (AsLval . argName . A.pname) mParams))
           Statement $
            Call futureFulfil
              [AsExpr encoreCtxVar,
