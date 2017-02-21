@@ -821,6 +821,7 @@ void so_lockfree_unsend(pony_ctx_t *ctx)
   }
 }
 
+__attribute__((unused))
 static void so_lockfree_recv(pony_ctx_t *ctx)
 {
   void *p;
@@ -885,23 +886,35 @@ void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F)
   return tmp;
 }
 
+#define mannual_not_trace 1
 bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     void *X, void *Y, void *Z, pony_trace_fn F)
 {
   assert(X);
   bool ret;
 
+  // ifdef mannual_not_trace for not tracing inside Z
+#ifdef mannual_not_trace
+#else
   pony_gc_collect_to_send(ctx);
   so_lockfree_set_trace_boundary(ctx, Y);
   pony_traceobject(ctx, Z, F);
   pony_gc_collect_to_send_done(ctx);
+#endif
 
   so_lockfree_pre_publish(Z);
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
     so_lockfree_publish(this, Z);
+
+#if mannual_not_trace
+    gc_sendobject_shallow(ctx, Z);
+    gc_sendobject_shallow_done(ctx);
+
+#else
     so_lockfree_send(ctx);
+#endif
 
     so_lockfree_delay_dec(ctx, Y);
   } else {
@@ -919,6 +932,8 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
   so_lockfree_inc_rc(Z);
   bool ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
+#ifdef mannual_not_trace
+#else
     pony_gc_collect_to_recv(ctx);
     so_lockfree_set_trace_boundary(ctx, Z);
     pony_traceobject(ctx, Y, F);
@@ -926,8 +941,12 @@ bool _so_lockfree_cas_unlink_wrapper(pony_ctx_t *ctx, void *X, void *Y, void *Z,
 
     so_lockfree_recv(ctx);
 
+    gc_recvobject_shallow(ctx, Y);
+    gc_recvobject_shallow_done(ctx);
+
     gc_sendobject_shallow(ctx, Y);
     gc_sendobject_shallow_done(ctx);
+#endif
 
     so_lockfree_delay_dec(ctx, Y);
   } else {
@@ -942,16 +961,23 @@ bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
   assert(X);
   bool ret;
 
+#ifdef mannual_not_trace
+#else
   pony_gc_collect_to_send(ctx);
   so_lockfree_set_trace_boundary(ctx, NULL);
   pony_traceobject(ctx, Z, F);
   pony_gc_collect_to_send_done(ctx);
+#endif
 
   so_lockfree_pre_publish(Z);
 
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
     so_lockfree_publish(this, Z);
+#ifdef mannual_not_trace
+    gc_sendobject_shallow(ctx, Z);
+    gc_sendobject_shallow_done(ctx);
+#else
     so_lockfree_send(ctx);
 
     pony_gc_collect_to_recv(ctx);
@@ -963,6 +989,7 @@ bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
 
     gc_sendobject_shallow(ctx, Y);
     gc_sendobject_shallow_done(ctx);
+#endif
 
     so_lockfree_delay_dec(ctx, Y);
   } else {
