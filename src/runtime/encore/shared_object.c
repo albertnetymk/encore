@@ -107,13 +107,11 @@ static void free_wrapper(wrapper_t *d)
 
 static void clean_list(pony_ctx_t *ctx, wrapper_t **list)
 {
-  // puts("clean_list");
   wrapper_t *cur = *list;
   wrapper_t *pre;
   while (cur) {
     pre = cur;
     cur = cur->next;
-    // printf("%p, rc=%u\n", pre, pre->rc);
     if (so_lockfree_dec_rc(pre->p) == 1) {
       gc_recvobject_shallow(ctx, pre->p);
     }
@@ -172,7 +170,7 @@ encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
 {
   encore_so_t *this = (encore_so_t*) encore_create(ctx, type);
   uint32_t n_threads = scheduler_cores();
-  this->so_gc.threads = encore_alloc(ctx, n_threads * sizeof(per_thread_t));
+  this->so_gc.threads = calloc(n_threads, sizeof(per_thread_t));
   // this->so_gc.entry_max = 100;
   this->so_gc.entry_max = 1;
   this->so_gc.global_epoch = 1;
@@ -201,6 +199,7 @@ void encore_so_finalizer(void *p)
   assert(this->so_gc.final_cb);
   pony_ctx_t *ctx = pony_ctx();
   this->so_gc.final_cb(ctx, this);
+  free(this->so_gc.threads);
 }
 
 static void so_lockfree_pre_publish(void *p)
@@ -223,6 +222,9 @@ static void so_lockfree_unpre_publish(void *p)
 __attribute__((unused))
 static void so_lockfree_publish(encore_so_t *this, void *p)
 {
+  if (!p) { return; }
+  encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
+  f->published = true;
 #if 0
   if (!p) { return; }
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
@@ -243,7 +245,6 @@ static bool so_lockfree_is_published(void *p)
 static void so_lockfree_delay_dec(so_gc_t *so_gc, void *p)
 {
   if (!p) { return; }
-  // printf("defer %p\n", p);
   wrapper_t *w = new_wrapper();
   w->p = p;
   per_thread_t *thread = &so_gc->threads[so_thread_index];
