@@ -365,21 +365,28 @@ bool _so_lockfree_cas_try_wrapper(pony_ctx_t *ctx, encore_so_t *this,
   bool ret;
   void *Z = UNFREEZE(_Z);
 
+#if mannual_not_trace
+#else
   pony_gc_collect_to_send(ctx);
   so_lockfree_set_trace_boundary(ctx, NULL);
   pony_traceobject(ctx, Z, F);
   pony_gc_collect_to_send_done(ctx);
-
+#endif
   so_lockfree_pre_publish(Z);
 
   ret = _atomic_cas((void**)X, &Y, _Z);
   if (ret) {
     assert(Y == NULL);
     so_lockfree_publish(this, Z);
+#if mannual_not_trace
+    gc_sendobject_shallow(ctx, Z);
+    gc_sendobject_shallow_done(ctx);
+#else
     so_lockfree_send(ctx);
+#endif
   } else {
     so_lockfree_unpre_publish(Z);
-    so_lockfree_unsend(ctx);
+    // so_lockfree_unsend(ctx);
   }
 
   return ret;
@@ -390,10 +397,10 @@ void* _so_lockfree_cas_extract_wrapper(void *_address, pony_trace_fn F)
   void **address = (void **)_address;
   void *tmp = *(void **)address;
   *address = NULL;
-  pony_ctx_t *ctx = pony_ctx();
-  pony_gc_recv(ctx);
-  pony_traceobject(ctx, tmp, F);
-  pony_recv_done(ctx);
+  // pony_ctx_t *ctx = pony_ctx();
+  // pony_gc_recv(ctx);
+  // pony_traceobject(ctx, tmp, F);
+  // pony_recv_done(ctx);
   return tmp;
 }
 
@@ -504,7 +511,7 @@ bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
     so_lockfree_delay_dec(&this->so_gc, Y);
   } else {
     so_lockfree_unpre_publish(Z);
-    so_lockfree_unsend(ctx);
+    // so_lockfree_unsend(ctx);
   }
 
   return ret;
