@@ -224,7 +224,8 @@ encoreAllocName :: CCode Name
 encoreAllocName = Nam "encore_alloc"
 
 encore_alloc_final_name :: CCode Name
-encore_alloc_final_name = Nam "encore_alloc_final"
+-- encore_alloc_final_name = Nam "encore_alloc_final"
+encore_alloc_final_name = Nam "calloc"
 
 partySequence :: CCode Name
 partySequence = Nam "party_sequence"

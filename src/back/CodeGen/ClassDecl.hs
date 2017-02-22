@@ -410,8 +410,11 @@ constructorImpl act cname ctable =
     createCall Passive
       | is_subord cname ctable =
           Call encore_alloc_final_name
-            [AsExpr encoreCtxVar, Sizeof classType,
-             Cast (Ptr void) $ so_lockfree_subord_finalizer_name cname]
+            [Int 1, Sizeof classType]
+      -- | is_subord cname ctable =
+      --     Call encore_alloc_final_name
+      --       [AsExpr encoreCtxVar, Sizeof classType,
+      --        Cast (Ptr void) $ so_lockfree_subord_finalizer_name cname]
       | otherwise =
           Call encoreAllocName [AsExpr encoreCtxVar, Sizeof classType]
 

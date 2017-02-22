@@ -113,8 +113,9 @@ static void clean_list(pony_ctx_t *ctx, wrapper_t **list)
     pre = cur;
     cur = cur->next;
     if (so_lockfree_dec_rc(pre->p) == 1) {
-      gc_recvobject_shallow(ctx, pre->p);
-      gc_recvobject_shallow_done(ctx);
+      free(pre->p);
+      // gc_recvobject_shallow(ctx, pre->p);
+      // gc_recvobject_shallow_done(ctx);
     }
     free_wrapper(pre);
   }
