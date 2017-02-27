@@ -78,7 +78,6 @@ static size_t so_lockfree_dec_rc(void *p)
   return _atomic_sub(&f->rc, 1);
 }
 
-extern uint32_t scheduler_cores();
 extern __thread uint32_t so_thread_index;
 
 #define barrier() asm volatile("": : :"memory")
@@ -124,7 +123,7 @@ static void clean_list(pony_ctx_t *ctx, wrapper_t **list)
 static void update_epoch(so_gc_t *so_gc)
 {
   uint8_t old = 0;
-  uint32_t n_threads = scheduler_cores();
+  uint32_t n_threads = so_gc->n_threads;
   uint8_t global_epoch = so_gc->global_epoch;
   if (_atomic_cas(&so_gc->global_epoch_lock, &old, 1)) {
     for (uint32_t i = 0; i < n_threads; ++i) {
@@ -168,13 +167,15 @@ void so_lockfree_on_exit(encore_so_t *this)
   barrier();
   this->so_gc.threads[so_thread_index].in_critical = 0;
 }
+
+extern uint32_t scheduler_cores();
 encore_so_t *encore_create_so(pony_ctx_t *ctx, pony_type_t *type)
 {
   encore_so_t *this = (encore_so_t*) encore_create(ctx, type);
   uint32_t n_threads = scheduler_cores();
   this->so_gc.threads = calloc(n_threads, sizeof(per_thread_t));
-  // this->so_gc.entry_max = 100;
-  this->so_gc.entry_max = 1;
+  this->so_gc.n_threads = n_threads;
+  this->so_gc.entry_max = 100;
   this->so_gc.global_epoch = 1;
   return this;
 }
@@ -428,7 +429,6 @@ bool _so_lockfree_cas_link_wrapper(pony_ctx_t *ctx, encore_so_t *this,
 #if mannual_not_trace
     gc_sendobject_shallow(ctx, Z);
     gc_sendobject_shallow_done(ctx);
-
 #else
     so_lockfree_send(ctx);
 #endif
@@ -491,6 +491,7 @@ bool _so_lockfree_cas_swap_wrapper(pony_ctx_t *ctx, encore_so_t *this,
   ret = _atomic_cas((void**)X, &Y, Z);
   if (ret) {
     so_lockfree_publish(this, Z);
+
 #ifdef mannual_not_trace
     gc_sendobject_shallow(ctx, Z);
     gc_sendobject_shallow_done(ctx);

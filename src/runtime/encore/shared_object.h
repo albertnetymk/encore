@@ -24,6 +24,7 @@ typedef struct so_gc_t {
   so_lockfree_final_cb_fn final_cb;
   per_thread_t *threads;
   uint32_t entry_max;
+  uint32_t n_threads;
   uint8_t global_epoch;
   uint8_t global_epoch_lock;
 } so_gc_t;
