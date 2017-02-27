@@ -104,7 +104,17 @@ static void free_wrapper(wrapper_t *d)
   wrapper_pool[wrapper_pool_counter++] = d;
 }
 
-static void clean_list(pony_ctx_t *ctx, wrapper_t **list)
+static void so_lockfree_delay_dec(so_gc_t *so_gc, void *p)
+{
+  if (!p) { return; }
+  wrapper_t *w = new_wrapper();
+  w->p = p;
+  per_thread_t *thread = &so_gc->threads[so_thread_index];
+  w->next = thread->limbo_list[thread->local_epoch];
+  thread->limbo_list[thread->local_epoch] = w;
+}
+
+static void clean_list(pony_ctx_t *ctx, so_gc_t *so_gc, wrapper_t **list)
 {
   wrapper_t *cur = *list;
   wrapper_t *pre;
@@ -112,7 +122,10 @@ static void clean_list(pony_ctx_t *ctx, wrapper_t **list)
     pre = cur;
     cur = cur->next;
     if (so_lockfree_dec_rc(pre->p) == 1) {
+      void **f = (void**) pre->p;
+      so_lockfree_delay_dec(so_gc, *(f+4));
       free(pre->p);
+
       // gc_recvobject_shallow(ctx, pre->p);
       // gc_recvobject_shallow_done(ctx);
     }
@@ -148,7 +161,7 @@ void so_lockfree_on_entry(pony_ctx_t *ctx, encore_so_t *this)
     barrier();
     uint8_t global_epoch = so_gc->global_epoch;
     if (local_epoch != global_epoch) {
-      clean_list(ctx, &thread->limbo_list[global_epoch]);
+      clean_list(ctx, so_gc, &thread->limbo_list[global_epoch]);
       thread->local_epoch = global_epoch;
       thread->entry = 0;
       return;
@@ -243,16 +256,6 @@ static bool so_lockfree_is_published(void *p)
   assert(p == UNFREEZE(p));
   encore_passive_lf_so_t *f = (encore_passive_lf_so_t *)p;
   return f->published;
-}
-
-static void so_lockfree_delay_dec(so_gc_t *so_gc, void *p)
-{
-  if (!p) { return; }
-  wrapper_t *w = new_wrapper();
-  w->p = p;
-  per_thread_t *thread = &so_gc->threads[so_thread_index];
-  w->next = thread->limbo_list[thread->local_epoch];
-  thread->limbo_list[thread->local_epoch] = w;
 }
 
 void so_lockfree_spec_subord_field_apply(pony_ctx_t *ctx, encore_so_t *this,
